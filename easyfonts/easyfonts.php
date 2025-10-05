@@ -1,332 +1,331 @@
 <?php
-/*
-Plugin Name: EasyFonts
-Plugin URI: 
-Description: Automatically Host existing google fonts locally on your server
-Version: 1.1.4
-Author: Uzair
-Author URI: https://easywpstuff.com
-License: GPL2
-*/
+/**
+ * Plugin Name: EasyFonts
+ * Plugin URI: https://easywpstuff.com
+ * Description: Automatically Host existing google fonts locally on your server
+ * Version: 1.2.0
+ * Author: Uzair
+ * Author URI: https://easywpstuff.com
+ * License: GPL2
+ * Text Domain: easyfonts
+ */
 
-// If this file is called directly, abort.
-if (!defined("WPINC")){
-	die;
+if ( ! defined( 'WPINC' ) ) {
+    die;
 }
 
-require_once dirname(__FILE__) . '/lib/simple_html_dom.php';
-
-include_once dirname(__FILE__) . '/inc/options.php';
-
-include_once dirname(__FILE__) . '/inc/notices.php';
-
-function get_base_url() {
-return is_ssl() ? set_url_scheme(wp_upload_dir()['baseurl'], 'https') : wp_upload_dir()['baseurl'];
+define( 'EASYFONTS_VERSION', '1.2.0' );
+define( 'EASYFONTS_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
+define( 'EASYFONTS_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
+define( 'EASYFONTS_UPLOAD_DIR', wp_upload_dir()['basedir'] . '/easyfonts' );
+$upload_baseurl = wp_upload_dir()['baseurl'];
+if ( is_ssl() ) {
+    $upload_baseurl = set_url_scheme( $upload_baseurl, 'https' );
 }
+define( 'EASYFONTS_UPLOAD_URL', $upload_baseurl . '/easyfonts' );
 
-function wp_get_remote_file($url) {
-$backtrace = debug_backtrace();
-$function_name = isset($backtrace[1]['function']) ? $backtrace[1]['function'] : '';
+require_once EASYFONTS_PLUGIN_DIR . '/lib/simple_html_dom.php';
+include_once EASYFONTS_PLUGIN_DIR . '/inc/options.php';
+include_once EASYFONTS_PLUGIN_DIR . '/inc/notices.php';
 
+class EasyFonts {
 
-$response = wp_remote_get($url, array('user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',));
+    public function __construct() {
+        add_action( 'plugins_loaded', [ $this, 'load_textdomain' ] );
+        add_action( 'template_redirect', [ $this, 'maybe_start_buffering' ] );
+        add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_options_styles' ] );
+        add_filter( 'plugin_action_links_' . plugin_basename( __FILE__ ), [ $this, 'add_settings_link' ] );
+        register_uninstall_hook( __FILE__, [ __CLASS__, 'uninstall' ] );
+    }
 
+    public function load_textdomain() {
+        load_plugin_textdomain( 'easyfonts', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
+    }
 
-if (is_wp_error($response)) {
-add_settings_error($function_name, 'http_error', $response->get_error_message(), 'error');
-return false;
-}
+    /**
+     * Get base URL considering SSL.
+     *
+     * @return string
+     */
+    private static function get_base_url() {
+        return is_ssl() ? set_url_scheme( wp_upload_dir()['baseurl'], 'https' ) : wp_upload_dir()['baseurl'];
+    }
 
+    public function maybe_start_buffering() {
+        if ( is_admin() ) {
+            return;
+        }
 
-return wp_remote_retrieve_body($response);
-}
+        if ( $this->should_process() ) {
+            ob_start( [ $this, 'combined_callback' ] );
+        }
 
-function easyfont_process_html_with_dom($content, $callback) {
-	// using simple html dom
-  $html = hgfl_str_get_html($content, false, true, 'UTF-8', false, PHP_EOL, ' ');
-  
-  if (empty($html)) {
-    return $content;
-  }
-  
-  $callback($html);
+        add_filter( 'wordpress_prepare_output', [ $this, 'after_smart_slider' ], 11 );
+        add_filter( 'groovy_menu_final_output', [ $this, 'after_smart_slider' ], 11 );
+    }
 
-  $content = $html->save(); 
-  return $content;
-}
+    private function should_process() {
+        $options = get_option( 'easyfonts_options', [] );
+        return ! empty( $options['host_link'] ) || ! empty( $options['host_import'] ) || ! empty( $options['process_fontface'] ) || ! empty( $options['remove_hints'] ) || ! empty( $options['remove_scripts'] );
+    }
 
-function easyfonts_process_font_face_declarations($css, $easyfonts_dir) {
-    if (preg_match_all('/@font-face\s*\{([^}]+)\}/', $css, $matches)) {
-        foreach ($matches[1] as $match) {
-            if (preg_match_all('/src\s*:\s*([^;]+);/', $match, $srcs)) {
-                foreach ($srcs[1] as $src) {
-                    if (preg_match('/url\(([^)]+)\)/', $src, $url_match)) {
-                        $font_url = trim($url_match[1], "'\"");
-                        $font_filename = hash('sha256', $font_url, false);
-                        $font_filename = substr($font_filename, 0, 10) . '.' . pathinfo($font_url, PATHINFO_EXTENSION);
-                        if (!file_exists($easyfonts_dir . '/' . $font_filename)) {
-                            $font_data = wp_get_remote_file($font_url);
-                            // Save the font file to the 'wp-content/uploads/easyfonts' directory
-                            file_put_contents($easyfonts_dir . '/' . $font_filename, $font_data);
+    public function combined_callback( $buffer ) {
+        $options = get_option( 'easyfonts_options', [] );
+
+        if ( ! empty( $options['host_link'] ) ) {
+            $buffer = $this->process_content_link_tag( $buffer );
+        }
+        if ( ! empty( $options['host_import'] ) ) {
+            $buffer = $this->process_content_import( $buffer );
+        }
+        if ( ! empty( $options['process_fontface'] ) ) {
+            $buffer = $this->download_gstatic_fonts( $buffer );
+        }
+        if ( ! empty( $options['remove_hints'] ) ) {
+            $buffer = $this->remove_resource_hints( $buffer );
+        }
+        if ( ! empty( $options['remove_scripts'] ) ) {
+            $buffer = $this->remove_font_scripts( $buffer );
+        }
+
+        return $buffer;
+    }
+
+    public function after_smart_slider( $buffer ) {
+        $options = get_option( 'easyfonts_options', [] );
+        if ( ! empty( $options['host_link'] ) ) {
+            $buffer = $this->process_content_link_tag( $buffer );
+        }
+        return $buffer;
+    }
+
+    /**
+     * Fetch remote file content.
+     *
+     * @param string $url URL to fetch.
+     * @return string|false Content or false on error.
+     */
+    private function get_remote_file( $url ) {
+        $response = wp_remote_get( $url, [
+            'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
+        ] );
+        if ( is_wp_error( $response ) ) {
+            error_log( __( 'EasyFonts remote fetch error: ', 'easyfonts' ) . $response->get_error_message() );
+            return false;
+        }
+        return wp_remote_retrieve_body( $response );
+    }
+
+    /**
+     * Process @font-face in CSS and download fonts.
+     *
+     * @param string $css CSS content.
+     * @return string Processed CSS.
+     */
+    private function process_font_face_declarations( $css ) {
+        if ( preg_match_all( '/@font-face\s*\{([^}]+)\}/', $css, $matches ) ) {
+            foreach ( $matches[1] as $match ) {
+                if ( preg_match_all( '/src\s*:\s*([^;]+);/', $match, $srcs ) ) {
+                    foreach ( $srcs[1] as $src ) {
+                        if ( preg_match( '/url\(([^)]+)\)/', $src, $url_match ) ) {
+                            $font_url = trim( $url_match[1], "'\"" );
+                            $font_filename = substr( hash( 'sha256', $font_url ), 0, 10 ) . '.' . pathinfo( $font_url, PATHINFO_EXTENSION );
+                            $local_path = EASYFONTS_UPLOAD_DIR . '/' . $font_filename;
+                            if ( ! file_exists( $local_path ) ) {
+                                $font_data = $this->get_remote_file( $font_url );
+                                if ( $font_data !== false ) {
+                                    file_put_contents( $local_path, $font_data );
+                                }
+                            }
+                            $css = str_replace( $src, "url('" . EASYFONTS_UPLOAD_URL . "/" . $font_filename . "')", $css );
                         }
-                        // Replace the src property with a local reference to the downloaded font file
-                        $finalbase = get_base_url();
-                        $css = str_replace($src, "url('" . $finalbase . "/easyfonts/" . $font_filename . "')", $css);
                     }
                 }
             }
         }
+        return $css;
     }
-    return $css;
-}
 
-
-function easyfont_process_content_link_tag($content) {
-    return easyfont_process_html_with_dom($content, function($html) use ($content) {
-
-        $upload_dir = wp_upload_dir();
-        $easyfonts_dir = $upload_dir['basedir'] . '/easyfonts';
-
-        if (!wp_mkdir_p($easyfonts_dir)) {
-            return $content; 
+    private function process_html_with_dom( $content, $callback ) {
+        $html = hgfl_str_get_html( $content, false, true, 'UTF-8', false, PHP_EOL, ' ' );
+        if ( empty( $html ) ) {
+            return $content;
         }
+        $callback( $html );
+        return $html->save();
+    }
 
-        // Filter-based support toggle for Bunny Fonts
-        $apply_bunnyfonts_filter = apply_filters('easyfonts_bunnyfonts', true);
+    private function process_content_link_tag( $content ) {
+        return $this->process_html_with_dom( $content, function( $html ) {
+            if ( ! wp_mkdir_p( EASYFONTS_UPLOAD_DIR ) ) {
+                error_log( __( 'EasyFonts could not create directory: ', 'easyfonts' ) . EASYFONTS_UPLOAD_DIR );
+                return;
+            }
+            $apply_bunny = apply_filters( 'easyfonts_bunnyfonts', true );
+            $providers = [ 'fonts.googleapis.com' ];
+            if ( $apply_bunny ) {
+                $providers[] = 'fonts.bunny.net';
+            }
+            foreach ( $html->find( 'link[rel=stylesheet]' ) as $link ) {
+                $href = $link->href;
+                $matched = false;
+                foreach ( $providers as $provider ) {
+                    if ( strpos( $href, $provider ) !== false ) {
+                        $matched = true;
+                        break;
+                    }
+                }
+                if ( ! $matched ) {
+                    continue;
+                }
+                if ( strpos( $href, '//' ) === 0 ) {
+                    $href = 'https:' . $href;
+                }
+                $decoded_url = rawurldecode( htmlspecialchars_decode( $href ) );
+                $filename = substr( hash( 'sha256', $decoded_url ), 0, 10 ) . '.css';
+                $local_path = EASYFONTS_UPLOAD_DIR . '/' . $filename;
+                if ( ! file_exists( $local_path ) ) {
+                    $css = $this->get_remote_file( $decoded_url );
+                    if ( $css === false ) {
+                        continue;
+                    }
+                    if ( ! preg_match_all( '/@font-face\s*\{([^}]+)\}/', $css, $matches ) ) {
+                        continue;
+                    }
+                    $css = $this->process_font_face_declarations( $css );
+                    file_put_contents( $local_path, $css );
+                }
+                $link->href = EASYFONTS_UPLOAD_URL . '/' . $filename;
+            }
+        } );
+    }
 
-        // List of supported font providers
-        $font_providers = [
-            'fonts.googleapis.com',
-        ];
-
-        if ($apply_bunnyfonts_filter) {
-            $font_providers[] = 'fonts.bunny.net';
-        }
-
-        foreach ($html->find('link[rel=stylesheet]') as $link) {
-            $href = $link->href;
-            $matched = false;
-
-            foreach ($font_providers as $provider) {
-                if (strpos($href, $provider) !== false) {
-                    $matched = true;
-                    break;
+    private function process_content_import( $content ) {
+        return $this->process_html_with_dom( $content, function( $html ) {
+            if ( ! wp_mkdir_p( EASYFONTS_UPLOAD_DIR ) ) {
+                error_log( __( 'EasyFonts could not create directory: ', 'easyfonts' ) . EASYFONTS_UPLOAD_DIR );
+                return;
+            }
+            foreach ( $html->find( 'style' ) as $style ) {
+                if ( preg_match_all( '/@import\s+(url\()?\s*([^\)]+)\s*(\))?/', $style->innertext, $matches ) ) {
+                    foreach ( $matches[2] as $match ) {
+                        if ( strpos( $match, 'fonts.googleapis.com' ) === false ) {
+                            continue;
+                        }
+                        $url = trim( $match, "'\"" );
+                        if ( strpos( $url, '//' ) === 0 ) {
+                            $url = 'https:' . $url;
+                        }
+                        $decoded_url = rawurldecode( htmlspecialchars_decode( $url ) );
+                        $filename = substr( hash( 'sha256', $decoded_url ), 0, 10 ) . '.css';
+                        $local_path = EASYFONTS_UPLOAD_DIR . '/' . $filename;
+                        if ( ! file_exists( $local_path ) ) {
+                            $css = $this->get_remote_file( $decoded_url );
+                            if ( $css === false ) {
+                                continue;
+                            }
+                            $css = $this->process_font_face_declarations( $css );
+                            file_put_contents( $local_path, $css );
+                        }
+                        $style->innertext = str_replace( $match, EASYFONTS_UPLOAD_URL . '/' . $filename, $style->innertext );
+                    }
                 }
             }
-
-            if (!$matched) continue;
-
-            // Normalize URL
-            if (strpos($href, '//') === 0) {
-                $href = 'https:' . $href;
-            }
-
-            $decoded_url = rawurldecode(htmlspecialchars_decode($href));
-            $filename = substr(hash('sha256', $decoded_url), 0, 10) . '.css';
-            $local_css_path = $easyfonts_dir . '/' . $filename;
-
-            if (!file_exists($local_css_path)) {
-                $css = wp_get_remote_file($decoded_url);
-                if (!preg_match_all('/@font-face\s*\{([^}]+)\}/', $css, $matches)) continue;
-
-                $css = easyfonts_process_font_face_declarations($css, $easyfonts_dir);
-                file_put_contents($local_css_path, $css);
-            }
-
-            $finalbasecss = get_base_url();
-            $link->href = $finalbasecss . '/easyfonts/' . $filename;
-        }
-
-        return $html;
-    });
-}
-
-function easyfont_process_content_import($content) {
-    // using simple html dom
-    return easyfont_process_html_with_dom($content, function($html) {
-    // Check if the 'easyfonts' directory exists and is writable
-    $easyfonts_dir = wp_upload_dir() ['basedir'] . '/easyfonts';
-    if (!wp_mkdir_p($easyfonts_dir)) {
-        return $content;     
+        } );
     }
-    // Find all <style> tags with @import statements that import a Google Fonts stylesheet
-    foreach ($html->find('style') as $style) {
-        if (preg_match_all('/@import\s+(url\()?\s*([^\)]+)\s*(\))?/', $style->innertext, $matches)) {
-            foreach ($matches[2] as $match) {
-                if (strpos($match, 'fonts.googleapis.com') !== false) {
-                    $url = trim($match, "'\"");
-                    if (strpos($url, '//') === 0) {
+
+    private function remove_resource_hints( $content ) {
+        return $this->process_html_with_dom( $content, function( $html ) {
+            $links = $html->find( 'link[rel=preload], link[rel=preconnect], link[rel=dns-prefetch]' );
+            foreach ( $links as $link ) {
+                if ( preg_match( '/(https:\/\/|\/\/)(fonts\.googleapis\.com|fonts\.gstatic\.com)/', $link->href ) ) {
+                    $link->outertext = '';
+                }
+            }
+            $styles = $html->find( 'style' );
+            foreach ( $styles as $style ) {
+                if ( strpos( $style->innertext, 'fonts.googleapis.com' ) !== false || strpos( $style->innertext, 'fonts.gstatic.com' ) !== false ) {
+                    $style->innertext = preg_replace( '#/\*(?:[^*]*(?:\*(?!/))*)*\*/#', '', $style->innertext );
+                }
+            }
+        } );
+    }
+
+    private function remove_font_scripts( $content ) {
+        return $this->process_html_with_dom( $content, function( $html ) {
+            $scripts = $html->find( 'script' );
+            foreach ( $scripts as $script ) {
+                if ( strpos( $script->innertext, 'WebFontConfig' ) !== false || strpos( $script->innertext, 'webfont.js' ) !== false ) {
+                    $script->outertext = '';
+                }
+            }
+        } );
+    }
+
+    private function download_gstatic_fonts( $content ) {
+        if ( ! wp_mkdir_p( EASYFONTS_UPLOAD_DIR ) ) {
+            error_log( __( 'EasyFonts could not create directory: ', 'easyfonts' ) . EASYFONTS_UPLOAD_DIR );
+            return $content;
+        }
+        $content = preg_replace( '/(url\s?\(["\']?)\/\/(fonts\.gstatic\.com[^"\']+)/', '$1https://$2', $content );
+        $html = hgfl_str_get_html( $content, false, true, 'UTF-8', false, PHP_EOL, ' ' );
+        if ( empty( $html ) ) {
+            return $content;
+        }
+        foreach ( $html->find( 'style' ) as $style ) {
+            if ( preg_match_all( '/url\(([^)]+)\)/', $style->innertext, $matches ) ) {
+                foreach ( $matches[1] as $match ) {
+                    $url = trim( $match, "'\"" );
+                    if ( strpos( $url, '//' ) === 0 ) {
                         $url = 'https:' . $url;
                     }
-					$decoded_url = rawurldecode(htmlspecialchars_decode($url));
-                    $filename = hash('sha256', $decoded_url, false);
-                    $filename = substr($filename, 0, 10) . '.css';
-                    // Check if the stylesheet file already exists
-                    if (!file_exists($easyfonts_dir . '/' . $filename)) {
-                        $css = wp_get_remote_file($decoded_url);
-                        $css = easyfonts_process_font_face_declarations($css, $easyfonts_dir);
-                        // Save the modified stylesheet to the 'wp-content/uploads/easyfonts' directory
-                        file_put_contents($easyfonts_dir . '/' . $filename, $css);
+                    if ( strpos( $url, 'fonts.gstatic.com' ) === false ) {
+                        continue;
                     }
-					$finalbasecss = get_base_url();
-                    // Replace the @import statement with a local reference to the downloaded stylesheet
-                    $style->innertext = str_replace($match, "" . $finalbasecss . '/easyfonts/' . $filename . "", $style->innertext);
+                    $path_parts = pathinfo( $url );
+                    $extension = $path_parts['extension'] ?? '';
+                    if ( empty( $extension ) ) {
+                        $extension = strpos( $url, '/l/font' ) !== false ? 'svg' : 'woff2';
+                    }
+                    $filename = substr( hash( 'sha256', $url ), 0, 10 ) . '.' . $extension;
+                    $local_path = EASYFONTS_UPLOAD_DIR . '/' . $filename;
+                    if ( ! file_exists( $local_path ) ) {
+                        $font_data = $this->get_remote_file( $url );
+                        if ( $font_data !== false ) {
+                            file_put_contents( $local_path, $font_data );
+                        }
+                    }
+                    $content = str_replace( $url, EASYFONTS_UPLOAD_URL . '/' . $filename, $content );
                 }
             }
         }
-    }
-    // Return the modified content
-	});
-}
-function easyfonts_remove_resource_hints($content) {
-  // Load the HTML into the Simple HTML DOM library
-  return easyfont_process_html_with_dom($content, function($html) {
-  
-  // Find all <link> elements with the preload, preconnect, or prefetch attributes
-  $links = $html->find('link[rel=preload],link[rel=preconnect],link[rel=dns-prefetch]');
-  
-  // Loop through the <link> elements
-  foreach($links as $link) {
-    // Check if the <link> element has a href attribute with the fonts.googleapis.com or fonts.gstatic.com domain
-    if (preg_match('/(https:\/\/|\/\/)(fonts\.googleapis\.com|fonts\.gstatic\.com)/', $link->href)) {
-      // Remove the <link> element
-      $link->outertext = '';
-    }
-  }
-  
-  // Find all <style> elements
-  $styles = $html->find('style');
-  
-  // Loop through the <style> elements
-  foreach($styles as $style) {
-    // Remove comments that contain the fonts.googleapis.com or fonts.gstatic.com domain
-    if (strpos($style->innertext, 'fonts.googleapis.com') !== false || strpos($style->innertext, 'fonts.gstatic.com') !== false) {
-        $style->innertext = preg_replace('#/\*(?:[^*]*(?:\*(?!/))*)*\*/#','',$style->innertext);
-    }
-  }
-  // Return the modified HTML
-  });
-}
-
-
-function easyfont_remove_font_scripts($content) {
-  // Load the HTML string into a Simple HTML DOM object
-   return easyfont_process_html_with_dom($content, function($html) {
-  
-  // Find all `script` elements
-  $scripts = $html->find('script');
-  foreach($scripts as $script) {
-    // Check if the `script` element contains the `WebFontConfig` or `webfont.js` strings
-    if(strpos($script->innertext, 'WebFontConfig') !== false || strpos($script->innertext, 'webfont.js') !== false) {
-      // Remove the `script` element
-      $script->outertext = '';
-    }
-  }
-  
-  // Return the modified HTML as a string
-   });
-}
-
-function easyfont_download_gstatic_fonts($content) {
-    // Create the "easyfonts" directory if it doesn't exist
-    $easyfonts_dir = wp_upload_dir()['basedir'] . '/easyfonts';
-    if (!wp_mkdir_p($easyfonts_dir)) {
         return $content;
     }
-	$content = preg_replace('/(url\s?\(["\']?)\/\/(fonts\.gstatic\.com[^"\']+)/', '$1https://$2', $content);
-    $html = hgfl_str_get_html($content, false, true, 'UTF-8', false, PHP_EOL, ' ');
-	if (empty($html)) {
-		return $content;
-	}
-    foreach ($html->find('style') as $style) {
-        if (preg_match_all('/url\(([^)]+)\)/', $style->innertext, $matches)) {
-            foreach ($matches[1] as $match) {
-                $url = trim($match, "'\"");
-                if(strpos($url,'//') === 0){
-                    $url = 'https:'.$url;
-                }
-                if (strpos($url, 'fonts.gstatic.com') !== false) {
-                    $path_parts = pathinfo($url);
-                    $extension = isset($path_parts['extension'])?$path_parts['extension']:'';
-                    if (empty($extension)) {
-                       if(strpos($url,'/l/font') !== false){
-                         $extension = 'svg';
-                    }else{
-                         $extension = 'woff2';
-                         }
-                    }
-                    $filename = hash('sha256', $url, false);
-                    $filename = substr($filename, 0, 10) . '.' . $extension;
-                    // Check if the font file already exists
-                    if (!file_exists($easyfonts_dir . '/' . $filename)) {
-                        $font_data = wp_get_remote_file($url);
-                        $file = fopen($easyfonts_dir . '/' . $filename, 'w');
-                        fwrite($file, $font_data);
-                        fclose($file);
-                    }
-                    $finalbase = get_base_url();
-                    $local_url = $finalbase . '/easyfonts/' . $filename;
-                    $content = str_replace($url, $local_url, $content);
-                }
-            }
+
+    public function enqueue_options_styles() {
+        if ( 'settings_page_easyfonts' === get_current_screen()->id ) {
+            wp_enqueue_style( 'easyfonts-options-styles', EASYFONTS_PLUGIN_URL . 'assets/style.css', [], EASYFONTS_VERSION );
         }
     }
-    return $content;
-}
 
-
-function easy_fonts_combined_callback($buffer) {
-    if (get_option('easyfonts_host_google_fonts_locally_link', false)) {
-        $buffer = easyfont_process_content_link_tag($buffer);
+    public function add_settings_link( $links ) {
+        $settings_link = '<a href="options-general.php?page=easyfonts">' . __( 'Settings', 'easyfonts' ) . '</a>';
+        array_unshift( $links, $settings_link );
+        return $links;
     }
 
-    if (get_option('easyfonts_host_google_fonts_locally_import', false)) {
-        $buffer = easyfont_process_content_import($buffer);
-    }
-
-    if (get_option('easyfonts_remove_inline_css_fontface', false)) {
-        $buffer = easyfont_download_gstatic_fonts($buffer);
-    }
-
-    if (get_option('easyfonts_remove_resource_hints', false)) {
-        $buffer = easyfonts_remove_resource_hints($buffer);
-    }
-
-    if (get_option('easyfonts_remove_inline_script_font', false)) {
-        $buffer = easyfont_remove_font_scripts($buffer);
-    }
-
-    return $buffer;
-}
-
-function easy_fonts_run_template_redirect() {
-	
-	ob_start('easy_fonts_combined_callback', 0, PHP_OUTPUT_HANDLER_REMOVABLE);
-	add_filter( 'wordpress_prepare_output', 'easyfont_run_after_smart_slider', 11 );
-	add_filter('groovy_menu_final_output', 'easyfont_run_after_smart_slider', 11);
-
-	
-}
-add_action( 'template_redirect', 'easy_fonts_run_template_redirect', 999 );
-
-
-function easyfont_run_after_smart_slider( $buffer ) {
-	if (get_option('easyfonts_host_google_fonts_locally_link', false)) {
-    $buffer = easyfont_process_content_link_tag( $buffer );
-	}
-    return $buffer;
-}
-
-function easyfonts_enqueue_options_styles() {
-    if ( 'settings_page_easyfonts' == get_current_screen()->id ) {
-        wp_enqueue_style( 'easyfonts-options-styles', plugin_dir_url( __FILE__ ) . 'assets/style.css', array(), '1.0.0' );
+    public static function uninstall() {
+        delete_option( 'easyfonts_options' );
+        $dir = EASYFONTS_UPLOAD_DIR;
+        if ( is_dir( $dir ) ) {
+            $files = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $dir, RecursiveDirectoryIterator::SKIP_DOTS ), RecursiveIteratorIterator::CHILD_FIRST );
+            foreach ( $files as $fileinfo ) {
+                $todo = ( $fileinfo->isDir() ? 'rmdir' : 'unlink' );
+                $todo( $fileinfo->getRealPath() );
+            }
+            rmdir( $dir );
+        }
     }
 }
-add_action( 'admin_enqueue_scripts', 'easyfonts_enqueue_options_styles' );
 
-function easyfonts_settings_link($links) {
-    $settings_link = '<a href="options-general.php?page=easyfonts">Settings</a>';
-    array_push($links, $settings_link);
-    return $links;
-}
-add_filter("plugin_action_links_easyfonts/easyfonts.php", "easyfonts_settings_link");
+new EasyFonts();

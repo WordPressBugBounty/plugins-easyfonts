@@ -1,32 +1,55 @@
 <?php
+/**
+ * EasyFonts Notices
+ *
+ * Handles admin notices for the EasyFonts plugin.
+ *
+ * @package EasyFonts
+ * @since 1.2.0
+ */
 
-// If this file is called directly, abort.
-if (!defined("WPINC")){
-	die;
+if ( ! defined( 'WPINC' ) ) {
+    die;
 }
 
+class EasyFonts_Notices {
 
-function easyfonts_check_incompatible_plugins() {
-  // Check if the 'Local Google Fonts' plugin is active
-  if(is_plugin_active('local-google-fonts/local-google-fonts.php')) {
-    // Display a notice to deactivate the plugin
-    ?>
-    <div class="notice notice-error is-dismissible">
-      <p>The 'Local Google Fonts' plugin is active and may cause conflicts with the Easy Fonts plugin. Please deactivate the 'Local Google Fonts' plugin to avoid any issues.</p>
-    </div>
-    <?php
-  }
-  
-  // Check if the 'Host Webfonts Local' plugin is active
-  if(is_plugin_active('host-webfonts-local/host-webfonts-local.php')) {
-    // Display a notice to deactivate the plugin
-    ?>
-    <div class="notice notice-error is-dismissible">
-      <p>The 'OMGF' plugin is active and may cause conflicts with the Easy Fonts plugin. Please deactivate the 'OMGF' plugin to avoid any issues.</p>
-    </div>
-    <?php
-  }
+    public function __construct() {
+        add_action( 'admin_notices', [ $this, 'check_incompatible_plugins' ] );
+    }
+
+    /**
+     * Check for incompatible plugins and display notices if active.
+     */
+    public function check_incompatible_plugins() {
+        /* Only show on the EasyFonts settings page to avoid cluttering other admin areas.
+        if ( 'settings_page_easyfonts' !== get_current_screen()->id ) {
+            return;
+        }*/
+
+        // Check for 'Local Google Fonts'.
+        if ( is_plugin_active( 'local-google-fonts/local-google-fonts.php' ) ) {
+            $this->display_notice( __( 'The "Local Google Fonts" plugin is active and may cause conflicts with EasyFonts. Please deactivate it to avoid issues.', 'easyfonts' ) );
+        }
+
+        // Check for 'OMGF | Host Google Fonts Locally'.
+        if ( is_plugin_active( 'host-webfonts-local/host-webfonts-local.php' ) ) {
+            $this->display_notice( __( 'The "OMGF | Host Google Fonts Locally" plugin is active and may cause conflicts with EasyFonts. Please deactivate it to avoid issues.', 'easyfonts' ) );
+        }
+    }
+
+    /**
+     * Display an error notice.
+     *
+     * @param string $message The notice message.
+     */
+    private function display_notice( $message ) {
+        ?>
+        <div class="notice notice-error is-dismissible">
+            <p><?php echo esc_html( $message ); ?></p>
+        </div>
+        <?php
+    }
 }
 
-// Display the notices on the options page
-add_action('admin_notices', 'easyfonts_check_incompatible_plugins');
+new EasyFonts_Notices();

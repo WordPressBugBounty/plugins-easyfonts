@@ -2,6 +2,10 @@ p.confirm {
     font-size: 15px;
     font-weight: 500;
 }
+p.confirm a:hover{
+	animation: pulse 2s infinite;
+  transition: background 0.3s ease;
+}
 p.confirm a {
     background: #00C3AA;
     color: white;
@@ -27,7 +31,7 @@ button.button.remove, button.button.preload {
     box-shadow: 1px 1px 4px lightgrey;
     font-weight: 500;
 }
-.easyfontwrap form {
+.easyfontwrap {
     background: white;
     box-shadow: 0 5px 30px rgb(0 0 0 / 10%);
     border-radius: 3px;
@@ -166,4 +170,163 @@ input#easyfonts_submit {
     text-align: center;
     color: white !important;
     border-bottom: 1px solid lightgray;
+}
+@media screen and (min-width:1000px){.easyfontwrap {
+    min-width: 800px;
+}}
+.easy {
+    background: #535db3;
+    box-shadow: 0 5px 30px rgb(0 0 0 / 10%);
+    border-radius: 3px;
+    padding: 5px 10px;
+    margin-top: 20px;
+    margin-right: 20px;
+    margin-bottom: 15px;
+    max-height: 600px;
+    text-align: center;
+    min-width: 300px;
+    max-width: 300px;
+}
+
+button#check-speed-btn {
+    color: #FFF;
+    cursor: pointer;
+    background-color: #00C3AA;
+    border: none;
+    font-size: 17px;
+    border-radius: 6px;
+    padding: 0px 20px;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+    top: 10px;
+    position: relative;
+    font-weight: bold;
+}
+.easymain {
+    display: inline-flex;
+}
+
+.lds-hourglass,
+.lds-hourglass:after {
+  box-sizing: border-box;
+}
+.lds-hourglass {
+  display: inline-block;
+  position: relative;
+  width: 80px;
+  height: 80px;
+}
+.lds-hourglass:after {
+  content: " ";
+  display: block;
+  border-radius: 50%;
+  width: 0;
+  height: 0;
+  margin: 8px;
+  box-sizing: border-box;
+  border: 32px solid white;
+  border-color: white transparent white transparent;
+  animation: lds-hourglass 1.2s infinite;
+}
+@keyframes lds-hourglass {
+  0% {
+    transform: rotate(0);
+    animation-timing-function: cubic-bezier(0.55, 0.055, 0.675, 0.19);
+  }
+  50% {
+    transform: rotate(900deg);
+    animation-timing-function: cubic-bezier(0.215, 0.61, 0.355, 1);
+  }
+  100% {
+    transform: rotate(1800deg);
+  }
+}
+
+
+    /* Styling for the result items */
+    .result-item {
+        margin: 10px 0;
+    }
+    
+    .result-item .score {
+        font-weight: bold;
+    }
+
+    .result-item .speed {
+        font-style: italic;
+    }
+
+    /* Add styles for score based on color (using mobile or desktop score) */
+    .result-item .score {
+        color: white;
+    }
+
+
+    .checking-speed {
+        font-size: 18px;
+        color: white;
+        font-weight: bold;
+    }
+.result-item {
+    font-size: 18px;
+    text-align: left;
+    color: white;
+    margin: 18px 0px;
+    border: 1px solid;
+    padding: 15px;
+}
+.warning {
+    font-size: 18px;
+    font-weight: 500;
+    padding: 10px 0px;
+    background: white;
+}
+.recommendation {
+    padding: 15px;
+    background: white;
+    color: black;
+}
+.recommendation strong {
+    font-size: 25px;
+}
+
+#speed-results h1 {
+    color: white;
+    padding: 0;
+    line-height: 28px;
+    font-size: 24px;
+    border-bottom: 1px solid;
+    padding-bottom: 15px;
+}
+div#speed-results p {
+    color: white;
+    font-size: 16px;
+}
+
+.downeasy {
+  display: inline-block;
+  padding: 12px 22px;
+  font-size: 16px;
+  font-weight: bold;
+  color: #fff;
+  background: #0073e6; /* WP blue style */
+  text-decoration: none;
+  border-radius: 6px;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+  animation: pulse 2s infinite;
+  transition: background 0.3s ease;
+}
+a.downeasy:hover {
+    color: white;
+}
+div#speed-results {
+    margin-top: 65px;
+}
+table.form-table th {
+    width: 210px;
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(0,115,230,0.7); }
+  70% { transform: scale(1.05); box-shadow: 0 0 0 15px rgba(0,115,230,0); }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(0,115,230,0); }
 }

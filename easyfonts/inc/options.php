@@ -1,338 +1,289 @@
 <?php
-
-// If this file is called directly, abort.
-if (!defined("WPINC")){
-	die;
+if ( ! defined( 'WPINC' ) ) {
+    die;
 }
 
-function easyfonts_options_page() {
-  // Add an options page to the Settings menu
-  add_options_page(
-    'Easy Fonts Options',
-    'Easy Fonts',
-    'manage_options',
-    'easyfonts',
-    'easyfonts_options_page_html'
-  );
-}
-add_action('admin_menu', 'easyfonts_options_page');
+class EasyFonts_Options {
 
-function easyfonts_options_page_html() {
-  // Check if the user has permission to access this page
-  if(!current_user_can('manage_options')) {
-    return;
-  }
-  
-  // Check if the form has been submitted
-  if(isset($_POST['easyfonts_submit']) && isset($_POST['easyfonts_nonce']) && wp_verify_nonce($_POST['easyfonts_nonce'], 'easyfonts_options_page_nonce')) {
-    // Sanitize the submitted form data
-    $host_google_fonts_locally_link = isset($_POST['easyfonts_host_google_fonts_locally_link']) ? sanitize_text_field($_POST['easyfonts_host_google_fonts_locally_link']) : false;
-      $host_google_fonts_locally_import = isset($_POST['easyfonts_host_google_fonts_locally_import']) ? sanitize_text_field($_POST['easyfonts_host_google_fonts_locally_import']) : false;
-    $remove_resource_hints = isset($_POST['easyfonts_remove_resource_hints']) ? sanitize_text_field($_POST['easyfonts_remove_resource_hints']) : false;
-    $remove_inline_css_fontface = isset($_POST['easyfonts_remove_inline_css_fontface']) ? sanitize_text_field($_POST['easyfonts_remove_inline_css_fontface']) : false;
-    $remove_inline_script_font = isset($_POST['easyfonts_remove_inline_script_font']) ? sanitize_text_field($_POST['easyfonts_remove_inline_script_font']) : false;
-    
-    // Update the 'host_google_fonts_locally link' option
-    update_option(
-      'easyfonts_host_google_fonts_locally_link',
-      $host_google_fonts_locally_link ? true : false
-    );
-    // Update the 'host_google_fonts_locally @import' option
-    update_option(
-      'easyfonts_host_google_fonts_locally_import',
-      $host_google_fonts_locally_import ? true : false
-    );
-    
-    // Update the 'remove_resource_hints' option
-    update_option(
-      'easyfonts_remove_resource_hints',
-      $remove_resource_hints ? true : false
-    );
-    update_option(
-      'easyfonts_remove_inline_css_fontface',
-      $remove_inline_css_fontface ? true : false
-    );
-    update_option(
-      'easyfonts_remove_inline_script_font',
-      $remove_inline_script_font ? true : false
-    );
-    
-    // Display a success message
-    ?>
-    <div class="notice notice-success is-dismissible">
-      <p>Your changes have been saved.</p>
-    </div>
-    <?php
-  }
-  
-  // Get the current values of the options
-  $host_google_fonts_locally_link = get_option('easyfonts_host_google_fonts_locally_link', false);
-  $host_google_fonts_locally_import = get_option('easyfonts_host_google_fonts_locally_import', false);
-  $remove_resource_hints = get_option('easyfonts_remove_resource_hints', false);
-  $remove_inline_css_fontface = get_option('easyfonts_remove_inline_css_fontface', false);
-  $remove_inline_script_font = get_option('easyfonts_remove_inline_script_font', false);
-  
-  ?>
-  <div class="easyfontwrap">
-    
-    <form method="post">
-      <?php wp_nonce_field('easyfonts_options_page_nonce', 'easyfonts_nonce'); ?>
-        <div class="heading">
-            <h1>Easy Fonts Options</h1> </div><p class="confirm">
-            To confirm and obtain the list of fonts that are loading on your website <a href="https://easywpstuff.com/google-fonts-checker/" target="_blank">click here</a>
-            </p>
-      <table class="form-table">
-        <tr>
-          <th scope="row">
-            <div class="easyfonts_host_google_fonts_locally_link">Process Google fonts Stylesheet</div>
-          </th>
-          <td>
-            <div class="checkbox-wrapper-2"><label for="easyfonts_host_google_fonts_locally_link"><input class="sc-gJwTLC ikxBAC" type="checkbox" name="easyfonts_host_google_fonts_locally_link" id="easyfonts_host_google_fonts_locally_link" value="1" <?php echo $host_google_fonts_locally_link ? 'checked' : ''; ?>><span class="slider"></span></label></div>
-            <p class="description">If enabled, the plugin will download Google Fonts from <code><strong>&lt;link&gt;</strong></code> and host them locally.</p>
-          </td>
-        </tr>
-          <tr>
-          <th scope="row">
-            <div class="easyfonts_host_google_fonts_locally_import">Process @import inline style </div>
-          </th>
-          <td>
-            <div class="checkbox-wrapper-2"><label for="easyfonts_host_google_fonts_locally_import"><input class="sc-gJwTLC ikxBAC" type="checkbox" name="easyfonts_host_google_fonts_locally_import" id="easyfonts_host_google_fonts_locally_import" value="1" <?php echo $host_google_fonts_locally_import ? 'checked' : ''; ?>><span class="slider"></span></label></div>
-            <p class="description">If enabled, the plugin will process <code><strong>@import</strong></code> rules from inline <code><strong>&lt;style&gt;</strong></code> tags.</p>
-          </td>
-        </tr>
-        <tr>
-          <th scope="row">
-                          <div class="easyfonts_remove_inline_css_fontface">Process @font-face statement</div>
-          </th>
-          <td>
-            <div class="checkbox-wrapper-2"><label for="easyfonts_remove_inline_css_fontface"><input type="checkbox" class="sc-gJwTLC ikxBAC" name="easyfonts_remove_inline_css_fontface" id="easyfonts_remove_inline_css_fontface" value="1" <?php echo $remove_inline_css_fontface ? 'checked' : ''; ?>><span class="slider"></span></label></div>
-            <p class="description">If enabled, the plugin will process <code><strong>@font-face</strong></code> statement from inline <code><strong>&lt;style&gt;</strong></code> tags.</p>
-          </td>
-        </tr>
-        <tr>
-          <th scope="row">
-                          <div class="easyfonts_remove_resource_hints">Remove Resource Hints</div>
-          </th>
-          <td>
-              <div class="checkbox-wrapper-2"><label for="easyfonts_remove_resource_hints" class="switch"><input class="sc-gJwTLC ikxBAC" type="checkbox" name="easyfonts_remove_resource_hints" id="easyfonts_remove_resource_hints" value="1" <?php echo $remove_resource_hints ? 'checked' : ''; ?>><span class="slider"></span></label></div>
-            <p class="description">If enabled, the plugin will remove resource hints (such as <code><strong>preconnect</strong></code>, <code><strong>prefetch</strong></code>, etc) from the website.</p>
-          </td>
-        </tr>
-        
-        <tr>
-          <th scope="row">
-                          <label for="easyfonts_remove_inline_script_font">Remove webfont.js fonts </label>
-          </th>
-          <td>
-            <div class="checkbox-wrapper-2"><label for="easyfonts_remove_inline_script_font"><input type="checkbox" class="sc-gJwTLC ikxBAC" name="easyfonts_remove_inline_script_font" id="easyfonts_remove_inline_script_font" value="1" <?php echo $remove_inline_script_font ? 'checked' : ''; ?>><span class="slider"></span></label></div>
-            <p class="description">If enabled, the plugin will remove google fonts loading from <code><strong>webfont.js</strong></code> loader inline <code><strong>script</strong></code> tags.</p>
-          </td>
-        </tr>
-      </table>
-      <?php submit_button('Save Changes', 'primary', 'easyfonts_submit'); ?>
-        <button type="submit" name="easyfonts_clear_font_cache" class="button remove">Remove All stored Fonts</button>
-        <?php if (get_option('easyfonts_host_google_fonts_locally_link', false) || get_option('easyfonts_host_google_fonts_locally_import', false) || get_option('easyfonts_remove_inline_css_fontface', false)) : ?>
-      <button type="submit" name="easyfonts_preload" class="button preload">Preload Fonts</button>
-        <?php endif; ?>
-      
-    </form>
-      <div>
-     
-      </div>
-      <?php if (get_option('easyfonts_host_google_fonts_locally_link', false) || get_option('easyfonts_host_google_fonts_locally_import', false)) { easyfonts_list_styles();} ?>
-  </div>
-  <?php
-    // Check if the 'Clear Font Cache' button has been clicked
-  if(isset($_POST['easyfonts_clear_font_cache']) && isset($_POST['easyfonts_nonce']) && wp_verify_nonce($_POST['easyfonts_nonce'], 'easyfonts_options_page_nonce')) {
-    easyfonts_clear_font_cache();
-  }
-    if(isset($_POST['easyfonts_preload']) && isset($_POST['easyfonts_nonce']) && wp_verify_nonce($_POST['easyfonts_nonce'], 'easyfonts_options_page_nonce')) {
-    easyfonts_preload();
-  }
-    if(isset($_POST['easyfonts_submit']) && isset($_POST['easyfonts_nonce']) && wp_verify_nonce($_POST['easyfonts_nonce'], 'easyfonts_options_page_nonce')){
-    if (get_option('easyfonts_host_google_fonts_locally_link', false) || get_option('easyfonts_host_google_fonts_locally_import', false) || get_option('easyfonts_remove_inline_css_fontface', false)) {
-        easyfonts_preload_save();
+    public function __construct() {
+        add_action( 'admin_menu', [ $this, 'add_options_page' ] );
+        add_action( 'admin_init', [ $this, 'register_settings' ] );
+		add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_speed_check_assets' ] );
     }
-  }
-}
 
-function easyfonts_clear_font_cache() {
-  // Get the WordPress uploads directory
-  $uploads_dir = wp_upload_dir();
-  
-  // Build the path to the 'easyfonts' folder
-  $easyfonts_dir = $uploads_dir['basedir'] . '/easyfonts/';
-  
-  // Open the 'easyfonts' folder
-  $handle = opendir($easyfonts_dir);
-  
-  // Iterate over the files in the 'easyfonts' folder
-  while(($file = readdir($handle)) !== false) {
-    // Skip the current and parent directories
-    if($file == '.' || $file == '..') {
-      continue;
-    }
-    
-    // Build the path to the file
-    $file_path = $easyfonts_dir . $file;
-    
-    // Delete the file
-    unlink($file_path);
-  }
-  
-  // Close the 'easyfonts' folder
-  closedir($handle);
-  
-  // Display a success message
-  ?>
-  <div class="notice notice-success is-dismissible">
-    <p>The fonts have been removed.</p>
-  </div>
-  <?php
-}
-
-function easyfonts_preload_save() {
-    // Get the current user
-    $current_user = wp_get_current_user();
-    // Check if the user is an admin
-    if (user_can($current_user, 'manage_options')) {
-        // Get the cookies for the current user
-        $cookies = wp_get_current_user()->get_session_tokens();
-        // Add the cookies and headers to the request
-        $options = array(
-            'cookies' => $cookies,
-            'headers' => array(
-                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
-            ),
+    public function add_options_page() {
+        add_options_page(
+            __( 'Easy Fonts Options', 'easyfonts' ),
+            __( 'Easy Fonts', 'easyfonts' ),
+            'manage_options',
+            'easyfonts',
+            [ $this, 'options_page_html' ]
         );
-        // Append a query string to the homepage URL to visit it as an admin
-        $home_url = home_url() . '?easyfonts_preload=1';
-        // Visit the homepage as admin to preload the fonts
-        wp_remote_get($home_url, $options);
     }
-}
 
+    public function register_settings() {
+        register_setting( 'easyfonts', 'easyfonts_options' );
 
-function easyfonts_preload() {
-	
-    $current_user = wp_get_current_user();
-    // Check if the user is an admin
-    if (user_can($current_user, 'manage_options')) {
-        // Get the cookies for the current user
-        $cookies = wp_get_current_user()->get_session_tokens();
-        // Add the cookies and headers to the request
-        $options = array(
-            'cookies' => $cookies,
-            'headers' => array(
-                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
-            ),
-        );
-        // Append a query string to the homepage URL to visit it as an admin
-        $home_url = home_url() . '?easyfonts_preload=1';
-        // Visit the homepage as admin to preload the fonts
-        wp_remote_get($home_url, $options);
+        add_settings_section( 'easyfonts_main', __( 'Easy Fonts Settings', 'easyfonts' ), null, 'easyfonts' );
+
+        add_settings_field( 'host_link', __( 'Process Google fonts Stylesheet', 'easyfonts' ), [ $this, 'checkbox_field' ], 'easyfonts', 'easyfonts_main', [ 'label_for' => 'host_link', 'desc' => __( 'Download Google Fonts from <code>&lt;link&gt;</code> and host them locally.', 'easyfonts' ) ] );
+        add_settings_field( 'host_import', __( 'Process @import inline style', 'easyfonts' ), [ $this, 'checkbox_field' ], 'easyfonts', 'easyfonts_main', [ 'label_for' => 'host_import', 'desc' => __( 'Process <code>@import</code> rules from inline <code>&lt;style&gt;</code> tags.', 'easyfonts' ) ] );
+        add_settings_field( 'process_fontface', __( 'Process @font-face statement', 'easyfonts' ), [ $this, 'checkbox_field' ], 'easyfonts', 'easyfonts_main', [ 'label_for' => 'process_fontface', 'desc' => __( 'Process <code>@font-face</code> from inline <code>&lt;style&gt;</code> tags.', 'easyfonts' ) ] );
+        add_settings_field( 'remove_hints', __( 'Remove Resource Hints', 'easyfonts' ), [ $this, 'checkbox_field' ], 'easyfonts', 'easyfonts_main', [ 'label_for' => 'remove_hints', 'desc' => __( 'Remove resource hints like <code>preconnect</code>, <code>prefetch</code>.', 'easyfonts' ) ] );
+        add_settings_field( 'remove_scripts', __( 'Remove webfont.js fonts', 'easyfonts' ), [ $this, 'checkbox_field' ], 'easyfonts', 'easyfonts_main', [ 'label_for' => 'remove_scripts', 'desc' => __( 'Remove Google Fonts loading from <code>webfont.js</code> inline scripts.', 'easyfonts' ) ] );
     }
-  
-  // Display a success message
-  ?>
-  <div class="notice notice-success is-dismissible">
-    <p>The fonts have been preloaded.</p>
-  </div>
-  <?php
-}
 
-function easyfonts_list_styles() {
-    $easyfonts_dir = wp_upload_dir()['basedir'] . '/easyfonts/';
-    $css_files = array();
-    $style_data = array();
+    public function checkbox_field( $args ) {
+        $options = get_option( 'easyfonts_options', [] );
+        $id = $args['label_for'];
+        $checked = ! empty( $options[ $id ] ) ? 'checked' : '';
+        echo '<div class="checkbox-wrapper-2"><label for="easyfonts_options[' . esc_attr( $id ) . ']"><input class="sc-gJwTLC ikxBAC" type="checkbox" id="easyfonts_options[' . esc_attr( $id ) . ']" name="easyfonts_options[' . esc_attr( $id ) . ']" value="1" ' . $checked . '><span class="slider"></span></label></div>';
+        if ( ! empty( $args['desc'] ) ) {
+            echo '<p class="description">' . wp_kses_post( $args['desc'] ) . '</p>';
+        }
+    }
 
-    try {
-        if (!is_dir($easyfonts_dir)) {
-            throw new Exception("Please make sure to preload the font or visit the homepage.");
+    public function options_page_html() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            return;
         }
 
-        $dir = new DirectoryIterator($easyfonts_dir);
-        foreach ($dir as $file) {
-            if (!$file->isFile()) continue;
-            if ($file->getExtension() === 'css') {
+        $this->handle_actions();
+
+        $options = get_option( 'easyfonts_options', [] );
+        ?><div class="easymain">
+        <div class="easyfontwrap">
+            <div class="heading"><h1><?php esc_html_e( 'Easy Fonts Options', 'easyfonts' ); ?></h1></div>
+            <p class="confirm"><?php printf( __( 'This plugin is free, fast, and extremely lightweight (only 30KB). If you find it useful, <a href="%s" target="_blank">Support Us with 5⭐ Rating</a>', 'easyfonts' ), 'https://wordpress.org/support/plugin/easyfonts/reviews/#new-post' ); ?></p>
+            <form method="post" action="options.php">
+                <?php
+                settings_fields( 'easyfonts' );
+                do_settings_sections( 'easyfonts' );
+                submit_button( __( 'Save Changes', 'easyfonts' ), 'primary', 'submit', true, array( 'id' => 'easyfonts_submit' ) );
+                ?>
+            </form>
+            <form method="post">
+                <?php wp_nonce_field( 'easyfonts_actions', 'easyfonts_nonce' ); ?>
+                <button type="submit" name="easyfonts_clear_cache" class="button remove"><?php esc_html_e( 'Remove All stored Fonts', 'easyfonts' ); ?></button>
+                <?php if ( ! empty( $options['host_link'] ) || ! empty( $options['host_import'] ) || ! empty( $options['process_fontface'] ) ) : ?>
+                    <button type="submit" name="easyfonts_preload" class="button preload"><?php esc_html_e( 'Preload Fonts', 'easyfonts' ); ?></button>
+                <?php endif; ?>
+            </form>
+            <?php
+            if ( ! empty( $options['host_link'] ) || ! empty( $options['host_import'] ) ) {
+                $this->list_styles();
+            }
+            ?>
+        </div><div class="easy">
+<div id="speed-results">
+    <h1>Is Your Hosting Slowing You Down?</h1><p>
+	Your hosting plays a key role in website speed and user experience. Analyze your server’s performance now, and explore better solutions if needed.
+	</p>
+</div>
+			<button id="check-speed-btn" class="button button-primary">Run Speed Test</button></div></div>
+        <?php
+    }
+
+    private function handle_actions() {
+        if ( empty( $_POST['easyfonts_nonce'] ) || ! wp_verify_nonce( $_POST['easyfonts_nonce'], 'easyfonts_actions' ) ) {
+            return;
+        }
+
+        if ( isset( $_POST['easyfonts_clear_cache'] ) ) {
+            $this->clear_font_cache();
+        }
+
+        if ( isset( $_POST['easyfonts_preload'] ) ) {
+            $this->preload_fonts();
+        }
+    }
+
+    private function clear_font_cache() {
+        $dir = EASYFONTS_UPLOAD_DIR;
+        if ( is_dir( $dir ) ) {
+            $files = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $dir, RecursiveDirectoryIterator::SKIP_DOTS ), RecursiveIteratorIterator::CHILD_FIRST );
+            foreach ( $files as $fileinfo ) {
+                $todo = ( $fileinfo->isDir() ? 'rmdir' : 'unlink' );
+                $todo( $fileinfo->getRealPath() );
+            }
+            rmdir( $dir );
+        }
+        add_settings_error( 'easyfonts_messages', 'easyfonts_message', __( 'The fonts have been removed.', 'easyfonts' ), 'success' );
+    }
+
+    private function preload_fonts() {
+        $current_user = wp_get_current_user();
+        if ( ! user_can( $current_user, 'manage_options' ) ) {
+            return;
+        }
+        $tokens = $current_user->get_session_tokens();
+        $options = [
+            'cookies' => $tokens,
+            'headers' => [
+                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
+            ],
+        ];
+        $home_url = home_url( '?easyfonts_preload=1' );
+        $response = wp_remote_get( $home_url, $options );
+        if ( is_wp_error( $response ) ) {
+            add_settings_error( 'easyfonts_messages', 'easyfonts_message', __( 'Preload failed: ', 'easyfonts' ) . $response->get_error_message(), 'error' );
+        } else {
+            add_settings_error( 'easyfonts_messages', 'easyfonts_message', __( 'The fonts have been preloaded.', 'easyfonts' ), 'success' );
+        }
+    }
+	
+	
+
+    private function list_styles() {
+        $css_files = [];
+        $style_data = [];
+        try {
+            if ( ! is_dir( EASYFONTS_UPLOAD_DIR ) ) {
+                throw new Exception( __( 'Please make sure to preload the font or visit the homepage.', 'easyfonts' ) );
+            }
+            $dir = new DirectoryIterator( EASYFONTS_UPLOAD_DIR );
+            foreach ( $dir as $file ) {
+                if ( ! $file->isFile() || $file->getExtension() !== 'css' ) {
+                    continue;
+                }
                 $css_files[] = $file->getFilename();
             }
-        }
-
-        if (!empty($css_files)) {
-            echo '<table class="styled-table">';
-            echo '<thead>';
-            echo '<tr>';
-            echo '<th>Hosted Fonts CSS URL</th>';
-            echo '<th>Font Families</th>';
-            echo '<th>Variants</th>';
-            echo '</tr>';
-            echo '</thead>';
-            echo '<tbody>';
-
-            foreach ($css_files as $file_name) {
-                // Prevent directory traversal
-                if (strpos($file_name, '..') !== false) {
+            if ( empty( $css_files ) ) {
+                echo '<p>' . esc_html__( 'Fonts styles are not found. Preload the font first or visit the homepage.', 'easyfonts' ) . '</p>';
+                return;
+            }
+            foreach ( $css_files as $file_name ) {
+                if ( strpos( $file_name, '..' ) !== false ) {
                     continue;
                 }
-
-                $file_url = wp_upload_dir()['baseurl'] . '/easyfonts/' . $file_name;
-                $file_path = $easyfonts_dir . $file_name;
-
-                // Ensure the file is readable
-                if (!is_readable($file_path)) {
+                $file_path = EASYFONTS_UPLOAD_DIR . '/' . $file_name;
+                if ( ! is_readable( $file_path ) ) {
                     continue;
                 }
-
-                $file_content = file_get_contents($file_path);
-                $font_family = array();
-                $variant_italic = array();
-                $variant_normal = array();
-
-                preg_match_all("/@font-face\s*{[^}]+}/", $file_content, $matches);
-                if (!empty($matches[0])) {
-                    foreach ($matches[0] as $font_face) {
-                        if (preg_match("/font-family:\s*['\"]?([^;'\"]+)['\"]?;/", $font_face, $font_family_match)) {
-                            $font_family[] = trim($font_family_match[1]);
-                        }
-                        if (preg_match("/font-style:\s*([^;]+);/", $font_face, $variant_match)) {
-                            $style = trim($variant_match[1]);
-                            if (preg_match("/font-weight:\s*([^;]+);/", $font_face, $weight_match)) {
-                                $variant = trim($weight_match[1]);
-                                if ($style === 'italic' && !in_array($variant, $variant_italic)) {
-                                    $variant_italic[] = $variant;
-                                } elseif ($style === 'normal' && !in_array($variant, $variant_normal)) {
-                                    $variant_normal[] = $variant;
-                                }
+                $file_content = file_get_contents( $file_path );
+                $font_family = [];
+                $variant_italic = [];
+                $variant_normal = [];
+                preg_match_all( '/@font-face\s*{[^}]+}/', $file_content, $matches );
+                if ( empty( $matches[0] ) ) {
+                    continue;
+                }
+                foreach ( $matches[0] as $font_face ) {
+                    if ( preg_match( '/font-family:\s*[\'"]?([^;\'"]+)[\'"]?;/', $font_face, $family_match ) ) {
+                        $font_family[] = trim( $family_match[1] );
+                    }
+                    if ( preg_match( '/font-style:\s*([^;]+);/', $font_face, $style_match ) ) {
+                        $style = trim( $style_match[1] );
+                        if ( preg_match( '/font-weight:\s*([^;]+);/', $font_face, $weight_match ) ) {
+                            $weight = trim( $weight_match[1] );
+                            if ( $style === 'italic' ) {
+                                $variant_italic[] = $weight;
+                            } elseif ( $style === 'normal' ) {
+                                $variant_normal[] = $weight;
                             }
                         }
                     }
                 }
-
-                $font_family = array_unique($font_family);
-                $style_data[] = array(
-                    'file_url' => esc_url($file_url),
-                    'font_families' => esc_attr(implode(',', $font_family)),
-                    'variant' => esc_html('italic ' . implode(',', $variant_italic) . ' | normal ' . implode(',', $variant_normal))
-                );
+                $font_family = array_unique( $font_family );
+                $variant_italic = array_unique( $variant_italic );
+                $variant_normal = array_unique( $variant_normal );
+                $style_data[] = [
+                    'file_url' => esc_url( EASYFONTS_UPLOAD_URL . '/' . $file_name ),
+                    'font_families' => esc_html( implode( ', ', $font_family ) ),
+                    'variant' => esc_html( 'italic: ' . implode( ', ', $variant_italic ) . ' | normal: ' . implode( ', ', $variant_normal ) ),
+                ];
             }
-
-            foreach ($style_data as $style) {
-                echo '<tr>';
-                echo '<td><a href="' . esc_url($style['file_url']) . '" target="_blank" rel="noopener">' . esc_html($style['file_url']) . '</a></td>';
-				echo '<td>' . esc_html($style['font_families']) . '</td>';
-				echo '<td>' . esc_html($style['variant']) . '</td>';
-                echo '</tr>';
+            if ( empty( $style_data ) ) {
+                return;
             }
-
-            echo '</tbody>';
-            echo '</table>';
-        } else {
-            if (get_option('easyfonts_host_google_fonts_locally_link', false) || get_option('easyfonts_host_google_fonts_locally_import', false)) {
-                echo esc_html__('Fonts styles are not found. Preload the font first or visit the homepage.', 'easyfonts');
+            echo '<table class="styled-table"><thead><tr><th>' . esc_html__( 'Hosted Fonts CSS URL', 'easyfonts' ) . '</th><th>' . esc_html__( 'Font Families', 'easyfonts' ) . '</th><th>' . esc_html__( 'Variants', 'easyfonts' ) . '</th></tr></thead><tbody>';
+            foreach ( $style_data as $style ) {
+                echo '<tr><td><a href="' . $style['file_url'] . '" target="_blank" rel="noopener">' . $style['file_url'] . '</a></td><td>' . $style['font_families'] . '</td><td>' . $style['variant'] . '</td></tr>';
             }
+            echo '</tbody></table>';
+        } catch ( Exception $e ) {
+            echo '<div class="error-message">' . esc_html__( 'Error: ', 'easyfonts' ) . esc_html( $e->getMessage() ) . '</div>';
         }
-    } catch (Exception $e) {
-        echo '<div class="error-message">' . esc_html__('Error: ', 'easyfonts') . esc_html($e->getMessage()) . '</div>';
     }
+	public function enqueue_speed_check_assets( $hook ) {
+    if ( 'settings_page_easyfonts' !== $hook ) {
+        return;
+    }
+
+    wp_enqueue_script( 'jquery' ); // Ensure jQuery.
+
+    // Localize PHP values into JS safely
+    wp_localize_script( 'jquery', 'speedCheckData', array(
+        'apiKey'     => 'AIzaSyA3CHybGfa0lOaXRwjc42lJDxAZsG3Rwos',
+        'pageUrl'    => home_url(),
+        'phpVersion' => phpversion(),
+        'affiliateLink' => 'https://unified.cloudways.com/signup?id=662383&coupon=EASYWPSTUFF',
+    ) );
+
+    $script = <<<JS
+    jQuery(document).ready(function($) {
+        $('#check-speed-btn').click(function() {
+		   var btn = $(this); 
+            btn.text('🔍 Checking Site Speed…').prop('disabled', true);
+            var apiKey = speedCheckData.apiKey;
+            var pageUrl = speedCheckData.pageUrl;
+            var phpVersion = speedCheckData.phpVersion;
+            var affiliateLink = speedCheckData.affiliateLink;
+
+            var mobileApiUrl = 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=' + encodeURIComponent(pageUrl) + '&strategy=mobile&key=' + apiKey;
+            var desktopApiUrl = 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=' + encodeURIComponent(pageUrl) + '&strategy=desktop&key=' + apiKey;
+
+            $('#speed-results').html('<div class="lds-hourglass"></div><p class="checking-speed">⏳Fetching Performance Data…... Please wait.</p>');
+
+            $.when(
+                $.get(mobileApiUrl),
+                $.get(desktopApiUrl)
+            ).done(function(mobileResponse, desktopResponse) {
+                var mobileScore = Math.round(mobileResponse[0].lighthouseResult.categories.performance.score * 100);
+                var desktopScore = Math.round(desktopResponse[0].lighthouseResult.categories.performance.score * 100);
+                var mobileSpeed = (mobileResponse[0].lighthouseResult.audits['speed-index'].numericValue / 1000).toFixed(2);
+                var desktopSpeed = (desktopResponse[0].lighthouseResult.audits['speed-index'].numericValue / 1000).toFixed(2);
+
+                var resultHtml = '<div class="result-item mobile-score"><strong>📱 Mobile Score:</strong> <span class="score">' + mobileScore + '</span></div>';
+                resultHtml += '<div class="result-item desktop-score"><strong>💻 Desktop Score:</strong> <span class="score">' + desktopScore + '</span></div>';
+                resultHtml += '<div class="result-item mobile-speed"><strong>📱 Mobile Speed:</strong> <span class="speed">' + mobileSpeed + ' sec</span></div>';
+                resultHtml += '<div class="result-item desktop-speed"><strong>💻 Desktop Speed:</strong> <span class="speed">' + desktopSpeed + ' sec</span></div>';
+                resultHtml += '<div class="result-item php-version"><strong>🐘 PHP Version:</strong> ' + phpVersion + '</div>';
+
+                var shouldRecommend = false;
+
+                if (mobileScore < 50 || desktopScore < 50) {
+                    shouldRecommend = true;
+                    resultHtml += '<div class="warning"><span style="color:red;">⚠️ Low PageSpeed score detected!</span></div>';
+                }
+
+                if (mobileSpeed > 3 || desktopSpeed > 2) {
+                    shouldRecommend = true;
+                    resultHtml += '<div class="warning"><span style="color:red;">⚠️ Your server is slow!</span></div>';
+                }
+
+                if (parseFloat(phpVersion) < 7.4) {
+                    shouldRecommend = true;
+                    resultHtml += '<div class="warning"><span style="color:red;">⚠️ Your PHP version is outdated!</span></div>';
+                }
+
+                if (shouldRecommend) {
+                    resultHtml += '<div class="recommendation"> <a class="downeasy" href="' + affiliateLink + '" target="_blank">Switch to Faster Hosting</a></div>';
+                } else {
+                    resultHtml += '<div class="optimized"><span style="color: #9dffa7;font-size: 20px;">✅ Your server is well-optimized!</span></div>';
+                }
+
+                $('#speed-results').html(resultHtml);
+				$('#check-speed-btn').hide();
+            }).fail(function() {
+                $('#speed-results').html('<p style="color:red;">⚠️ Error fetching speed test results.</p>');
+            });
+        });
+    });
+JS;
+
+    wp_add_inline_script( 'jquery', $script );
+   }
 }
+
+new EasyFonts_Options();
