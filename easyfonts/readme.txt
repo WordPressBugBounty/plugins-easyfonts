@@ -1,7 +1,7 @@
-=== EasyFonts: Local Google Fonts – Fast & Super lightweight (30kb) ===
+=== Host Google Fonts Locally – Fast & Super Lightweight (30kb) by EasyFonts ===
 Contributors: easywpstuff
 Donate link: 
-Tags: Tags: local google fonts, google fonts, gdpr, fonts, performance, dsgvo, font optimization, self host fonts, privacy, speed optimization, elementor fonts, divi fonts
+Tags: Tags: font, google fonts, gdpr, fonts, host google fonts
 Requires at least: 5.0
 Tested up to: 6.8.3
 Requires PHP: 5.6
@@ -9,7 +9,7 @@ Stable tag: 1.2
 License: GNU General Public License v2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Host Google Fonts locally on your server for faster loading 🚀, and full 💯 GDPR/DSGVO compliance. Super lightweight plugin⚡, No server & cpu overload.
+Locally host google font on your server for faster loading 🚀, and 💯 GDPR & DSGVO friendly fonts. Super lightweight plugin⚡, No server & cpu overload
 
 == Description ==
 
@@ -110,32 +110,32 @@ For best results, clear your cache after activation.
 1. [Settings Page: Configure local font hosting options.](assets/screenshot-1.png)
 
 == Changelog ==
-= 1.2 - October 5, 2025 =
+= 1.2 =
 * Optimized speed and plugin structure for better performance.
 
-= 1.1.4 - [Date] =
+= 1.1.4 =
 * Added Bunny Fonts support.
 
-= 1.1.3 - [Date] =
+= 1.1.3 =
 * Fixed security issues.
 
-= 1.1.2 - [Date] =
+= 1.1.2 =
 * Resolved WooCommerce checkout font issues.
 
-= 1.1.1 - [Date] =
+= 1.1.1 =
 * General improvements.
 
-= 1.1.0 - [Date] =
+= 1.1.0 =
 * Minor fixes; added Smart Slider 3 and Groovy Menu support.
 
-= 1.0.4 - [Date] =
+= 1.0.4 =
 * Fixed special characters in Google Fonts URLs.
 
-= 1.0.3 - [Date] =
+= 1.0.3 =
 * Handled fonts starting with //.
 
-= 1.0.2 - [Date] =
+= 1.0.2 =
 * Fixed HTTP protocol issues.
 
-= 1.0.0 - [Date] =
+= 1.0.0 =
 * Initial release.
