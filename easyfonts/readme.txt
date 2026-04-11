@@ -1,141 +1,140 @@
-=== Host Google Fonts Locally – Fast & Super Lightweight (30kb) by EasyFonts ===
-Contributors: easywpstuff
-Donate link: 
-Tags: Tags: font, google fonts, gdpr, fonts, host google fonts
+=== EasyFonts – Host Google Fonts Locally, GDPR Compliant, Faster Loading ===
+Contributors: uzair
+Tags: google fonts, local google fonts, disable google fonts, gdpr, core web vitals
 Requires at least: 5.0
-Tested up to: 6.8.3
-Requires PHP: 5.6
-Stable tag: 1.2
-License: GNU General Public License v2 or later
+Tested up to: 7.0
+Requires PHP: 7.4
+Stable tag: 1.3
+License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Locally host google font on your server for faster loading 🚀, and 💯 GDPR & DSGVO friendly fonts. Super lightweight plugin⚡, No server & cpu overload
+Host Google Fonts locally to speed up your site, improve Core Web Vitals, and ensure GDPR compliance. A lightweight (35KB), zero-config plugin.
 
 == Description ==
 
-Struggling with slow-loading Google Fonts or GDPR compliance issues? EasyFonts is your lightweight solution to **host Google Fonts locally** on your WordPress site. Automatically cache and serve fonts from your server, eliminating external calls to Google that can slow down your site and violate privacy laws like GDPR/DSGVO.
+**EasyFonts** is the lightest, fastest WordPress plugin to **host Google Fonts locally** on your own server. Just activate the plugin, and your Google Fonts are automatically downloaded, cached, and served directly from your domain. No manual uploads, no complex settings, and no external requests.
 
-In 2022, a German court ruled that loading Google Fonts from Google's servers violates GDPR by logging user IPs for analytics (more on [WPTavern](https://wptavern.com/german-court-fines-website-owner-for-violating-the-gdpr-by-using-google-hosted-fonts)). With EasyFonts, you avoid this entirely – fonts load from your domain, boosting speed and ensuring compliance.
+At only **35KB**, EasyFonts is built for absolute performance. Unlike bloated alternatives that take up 2MB of space and require endless configuration, EasyFonts does one job perfectly: it **disables external Google Fonts** and self-hosts them so your site loads faster, passes Core Web Vitals, and stays strictly compliant with European privacy laws.
 
-EasyFonts scans your site, downloads used Google Fonts (and Bunny Fonts), and replaces external links. No coding needed! Improve page speed, reduce DNS requests, and enhance user experience.
+= Why Host Google Fonts Locally? =
 
-= Why Choose EasyFonts for Local Google Fonts? =
-- **GDPR/DSGVO Compliant:** No data sent to Google – keep user privacy intact.
-- **Faster Site Speed:** Local hosting reduces latency and external dependencies.
-- **Easy Setup:** Activate, configure in settings, and let it handle the rest.
-- **Lightweight & Efficient:** Minimal impact on your site's resources.
-- **Broad Compatibility:** Works with most themes, page builders, and plugins.
+When your WordPress site loads fonts from Google's servers, you face two massive issues:
+
+1. **GDPR (DSGVO) Violations:** A German court ruled that sending visitor IP addresses to Google without consent violates GDPR. Sites are actively being fined for this.
+2. **Slow Core Web Vitals:** Every external connection to `fonts.googleapis.com` and `fonts.gstatic.com` adds latency, destroying your Time to First Byte (TTFB) and Largest Contentful Paint (LCP) scores.
+
+EasyFonts eliminates both problems instantly. It rewrites your CSS to serve fonts locally—stopping Google from tracking your users and drastically speeding up your site. 
+
+= Key Features & Performance Benefits =
+
+* **Modern Variable Font Support (NEW)** — Unlike older plugins that download 10+ separate font files for different weights, EasyFonts uses modern browser detection to download a **single, highly-optimized Variable Font file**. This saves massive amounts of bandwidth.
+* **Combine Font Stylesheets** — Merges all locally hosted font CSS into a single, optimized file placed right after `<body>`. Exact duplicate font faces are automatically removed to reduce HTTP requests.
+* **Fix FOIT with Font Display Control** — Force a `font-display: swap` value on every `@font-face` declaration to eliminate the "Flash of Invisible Text" and pass Google Lighthouse audits.
+* **Disable Google Fonts** — Completely severs all connections to Google's servers, ensuring 100% GDPR compliance.
+* **Automatic Local Hosting** — Detects Google Fonts loaded via `<link>` stylesheets, `@import` rules, and inline `@font-face` declarations.
+* **Clean Resource Hints** — Strips unnecessary `preconnect`, `dns-prefetch`, and `preload` tags pointing to external font servers to clean up your `<head>`.
+* **Bunny Fonts Support** — Also processes and locally hosts fonts from `fonts.bunny.net`.
+* **Auto Cache Clear** — Whenever you save settings, the font cache is instantly cleared and regenerated fresh to prevent broken layouts.
+* **Page Builder Compatible** — Works flawlessly with Elementor, Divi, WPBakery, GeneratePress, Astra, Kadence, and WooCommerce.
+
+= What Makes EasyFonts Beat the Competition? =
+
+* **35KB Size:** Competitors weigh between 500KB and 2MB. EasyFonts is 60x smaller.
+* **Zero Database Bloat:** Stores only one single option row. No custom tables, no transient spam.
+* **Zero Config Required:** Just enable and save. No scanning, no waiting, no manual font selection.
+* **No Premium Upsells:** Every pro-level feature (combining CSS, variable fonts, font-display control, deduplication) is 100% free. 
 
 = How It Works =
-1. EasyFonts detects Google Fonts loaded via &lt;link&gt; and @import, or @font-face inside inline &lt;style&gt;.
-2. It downloads and caches them locally in WOFF2 format (lightweight and supported by 96%+ of browsers).
-3. Replaces external URLs with your site's domain.
-4. Optionally removes resource hints and WebFontLoader for cleaner, faster loads.
 
-Test your site before/after: Use browser dev tools (Network tab) to check for "fonts.googleapis.com" or "fonts.gstatic.com" requests – they should disappear!
+1. Install and activate EasyFonts.
+2. Go to **Settings → Easy Fonts**.
+3. Enable the options you need (most users: enable all checkboxes and set Font Display to `swap`).
+4. Click **Save Changes** — the cache clears automatically.
+5. Visit your homepage (or click **Preload Fonts**) — fonts are downloaded and cached.
+6. Done. All Google Fonts are now served from your domain.
 
-Compatible with Elementor, WPBakery, Divi, WooCommerce, Smart Slider 3, Groovy Menu, and more. If you're using Bunny Fonts, they're supported too!
+== Installation ==
 
-= Benefits of Hosting Google Fonts Locally =
-- Reduce page load times by up to 30% with local caching.
-- Avoid Cumulative Layout Shift from slow font loading.
-- Legal peace of mind for EU users.
-- Better SEO: Faster sites rank higher on Google.
-
-Ready to optimize? Install now and see the difference!
-
-== Features ==
-* Automatically detect, cache, and **host Google Fonts locally** using <link> tags.
-* Support for Bunny Fonts local hosting.
-* Handle @import statements in inline <style> tags for local loading.
-* Process @font-face declarations in inline styles and replace with local URLs.
-* Remove unnecessary resource hints (preload, preconnect, dns-prefetch) to Google's domains.
-* Eliminate WebFontLoader (webfont.js) for cleaner code.
-* WOFF2 format only for optimal compression and browser support.
-* Compatibility with popular page builders: **Host Elementor Google Fonts locally**, WPBakery, Divi, and any theme.
-* Works with WooCommerce, Smart Slider 3, Groovy Menu, and more.
-* Lightweight – no bloat, just performance gains.
-
-== Plugin Compatibility ==
-EasyFonts integrates seamlessly with:
-- Elementor: Host Elementor Google Fonts on your local server.
-- WPBakery Page Builder: Full support for local font loading.
-- Divi Theme: Easily host Google Fonts locally for Divi.
-- WooCommerce: Fixes checkout issues with external fonts.
-- Smart Slider 3 and Groovy Menu: Added in recent updates.
-- Most other themes and plugins – if issues arise, contact support!
+1. Upload the `easyfonts` folder to `/wp-content/plugins/` or install via **Plugins → Add New** in your WordPress dashboard.
+2. Activate the plugin through **Plugins → Installed Plugins**.
+3. Go to **Settings → Easy Fonts** to configure.
+4. Enable the options you want and click **Save Changes**.
+5. Click **Preload Fonts** or simply visit your homepage — fonts will be downloaded and cached automatically.
 
 == Frequently Asked Questions ==
 
-= Is it legal to host Google Fonts locally on my server? =
-Yes! Google Fonts are open-source under licenses allowing commercial or personal use on any site.
+= Does EasyFonts work with my theme? =
 
-= Why does EasyFonts use only WOFF2 format for local fonts? =
-WOFF2 is the most efficient, lightweight format with 30% better compression than WOFF. It's supported by over 96% of modern browsers, ensuring fast loads without compatibility issues.
+Yes. EasyFonts works with any WordPress theme that loads Google Fonts — including Astra, GeneratePress, OceanWP, Kadence, Blocksy, Hello Elementor, Divi, TwentyTwentyFive, and any theme or child theme. It processes the final HTML output, so it catches fonts loaded by themes, plugins, and page builders alike.
 
-= How does hosting Google Fonts locally make my site GDPR/DSGVO compliant? =
-External Google Fonts send user data (like IPs) to Google's servers. Local hosting keeps everything on your server, preventing data transfers and ensuring compliance.
+= Does this plugin make my site GDPR compliant for Google Fonts? =
 
-= How can I check if my site is using Google Fonts externally? =
-Open browser dev tools (F12), go to the Network tab, filter by "Fonts", and reload. Look for requests to "fonts.googleapis.com" or "fonts.gstatic.com". With EasyFonts, these should be gone!
+Yes. Once EasyFonts is active and configured, all Google Fonts are served from your own server. No requests are made to fonts.googleapis.com or fonts.gstatic.com, so no visitor data is sent to Google.
 
-= Does this work with Elementor or Divi? =
-Absolutely! It hosts fonts locally for Elementor, Divi, WPBakery, and more. No extra setup needed.
+= Will this improve my page speed score? =
 
-= What if my fonts include special characters or subsets? =
-EasyFonts handles standard subsets. If issues occur, check your theme/plugin settings or contact support.
+Yes. Hosting fonts locally eliminates external DNS lookups and HTTP requests to Google's servers. Combined with the stylesheet merging and resource hint removal features, most sites see a measurable improvement in PageSpeed Insights, GTmetrix, and Lighthouse scores.
 
-= Will this improve my site's speed? =
-Yes – local fonts reduce external requests, DNS lookups, and latency. Test with tools like Google PageSpeed Insights.
+= Does it work with Elementor, WPBakery, and Divi? =
 
-= Can I use this with Bunny Fonts? =
-Yes, full support added in v1.1.4.
+Yes. EasyFonts processes the entire HTML output using output buffering, so it catches Google Fonts loaded by any page builder including Elementor, WPBakery, Divi, Beaver Builder, Bricks, and Breakdance.
 
-= What if I have multiple Google Fonts on different pages? =
-EasyFonts caches them all automatically for site-wide optimization.
+= What is the font-display option? =
 
-= Is there a pro version or add-ons? =
-Currently free and feature-packed. Future updates may add more!
+The `font-display` CSS property controls browser behavior while web fonts load. Setting it to `swap` ensures your text is always visible using a fallback font while custom fonts download — this fixes the "Ensure text remains visible during webfont load" warning in Lighthouse.
 
-== Installation ==
-1. Upload the plugin folder to `/wp-content/plugins/`.
-2. Activate via the 'Plugins' menu in WordPress.
-3. Go to Settings > EasyFonts to configure and download your site's Google Fonts locally.
-4. Browse your site to trigger detection – that's it!
+= Does EasyFonts support Bunny Fonts? =
 
-For best results, clear your cache after activation.
+Yes. EasyFonts automatically processes fonts from fonts.bunny.net in addition to Google Fonts.
 
+= How do I clear the font cache? =
+
+Go to **Settings → Easy Fonts** and click **Remove All Stored Fonts**. The cache also clears automatically whenever you save settings.
+
+= Will it work with caching plugins? =
+
+Yes. EasyFonts works with WP Rocket, W3 Total Cache, LiteSpeed Cache, WP Super Cache, and all other caching plugins. After configuring EasyFonts, clear your page cache so the updated HTML is served to visitors.
+
+= Can I use this with a CDN? =
+
+Yes. The locally hosted font files will be served through your CDN just like any other file in your uploads directory.
+
+= Does it handle multiple Google Fonts stylesheets from different plugins? =
+
+Yes. The Combine Font Stylesheets feature specifically addresses this — it finds all font stylesheets across your entire page (from themes, plugins, and page builders), merges them into one file, and removes duplicates.
 
 == Screenshots ==
-1. [Settings Page: Configure local font hosting options.](assets/screenshot-1.png)
+
+1. EasyFonts settings page showing all configuration options
+2. Hosted fonts table showing locally cached font families and variants
+3. Server speed test integration with PageSpeed Insights results
 
 == Changelog ==
-= 1.2 =
-* Optimized speed and plugin structure for better performance.
 
-= 1.1.4 =
-* Added Bunny Fonts support.
+= 1.3.0 =
+* New: Combine Font Stylesheets — merges all locally hosted font CSS into a single file with deduplication
+* New: Font Display control — set font-display (swap, block, fallback, optional, auto) on all @font-face declarations
+* New: Auto cache clear when settings are saved
 
-= 1.1.3 =
-* Fixed security issues.
-
-= 1.1.2 =
-* Resolved WooCommerce checkout font issues.
-
-= 1.1.1 =
-* General improvements.
+= 1.2.0 =
+* New: Process @font-face from inline style blocks (gstatic fonts)
+* New: Built-in server speed test via Google PageSpeed Insights
+* New: Preload fonts button for one-click font caching
+* Improved: SSL handling for upload URLs
+* Improved: Bunny Fonts support via filter
 
 = 1.1.0 =
-* Minor fixes; added Smart Slider 3 and Groovy Menu support.
-
-= 1.0.4 =
-* Fixed special characters in Google Fonts URLs.
-
-= 1.0.3 =
-* Handled fonts starting with //.
-
-= 1.0.2 =
-* Fixed HTTP protocol issues.
+* New: Remove Resource Hints (preconnect, dns-prefetch, preload)
+* New: Remove WebFont.js inline scripts
+* Improved: Better compatibility with Smart Slider and Groovy Menu
 
 = 1.0.0 =
-* Initial release.
+* Initial release
+* Host Google Fonts from link tags locally
+* Host Google Fonts from @import rules locally
+* Admin settings page with toggle controls
+
+== Upgrade Notice ==
+
+= 1.3.0 =
+New features: Combine font stylesheets into one file, font-display control, and auto cache clear on settings change. Recommended update for better performance and Core Web Vitals scores.

@@ -31,6 +31,8 @@ class EasyFonts_Options {
         add_settings_field( 'process_fontface', __( 'Process @font-face statement', 'easyfonts' ), [ $this, 'checkbox_field' ], 'easyfonts', 'easyfonts_main', [ 'label_for' => 'process_fontface', 'desc' => __( 'Process <code>@font-face</code> from inline <code>&lt;style&gt;</code> tags.', 'easyfonts' ) ] );
         add_settings_field( 'remove_hints', __( 'Remove Resource Hints', 'easyfonts' ), [ $this, 'checkbox_field' ], 'easyfonts', 'easyfonts_main', [ 'label_for' => 'remove_hints', 'desc' => __( 'Remove resource hints like <code>preconnect</code>, <code>prefetch</code>.', 'easyfonts' ) ] );
         add_settings_field( 'remove_scripts', __( 'Remove webfont.js fonts', 'easyfonts' ), [ $this, 'checkbox_field' ], 'easyfonts', 'easyfonts_main', [ 'label_for' => 'remove_scripts', 'desc' => __( 'Remove Google Fonts loading from <code>webfont.js</code> inline scripts.', 'easyfonts' ) ] );
+        add_settings_field( 'combine_fonts', __( 'Combine Font Stylesheets', 'easyfonts' ), [ $this, 'checkbox_field' ], 'easyfonts', 'easyfonts_main', [ 'label_for' => 'combine_fonts', 'desc' => __( 'Merge all locally hosted font CSS files into a single file and remove duplicates.', 'easyfonts' ) ] );
+        add_settings_field( 'font_display', __( 'Font Display', 'easyfonts' ), [ $this, 'select_field' ], 'easyfonts', 'easyfonts_main', [ 'label_for' => 'font_display', 'desc' => __( 'Set <code>font-display</code> on all <code>@font-face</code> declarations for better loading control.', 'easyfonts' ) ] );
     }
 
     public function checkbox_field( $args ) {
@@ -38,6 +40,29 @@ class EasyFonts_Options {
         $id = $args['label_for'];
         $checked = ! empty( $options[ $id ] ) ? 'checked' : '';
         echo '<div class="checkbox-wrapper-2"><label for="easyfonts_options[' . esc_attr( $id ) . ']"><input class="sc-gJwTLC ikxBAC" type="checkbox" id="easyfonts_options[' . esc_attr( $id ) . ']" name="easyfonts_options[' . esc_attr( $id ) . ']" value="1" ' . $checked . '><span class="slider"></span></label></div>';
+        if ( ! empty( $args['desc'] ) ) {
+            echo '<p class="description">' . wp_kses_post( $args['desc'] ) . '</p>';
+        }
+    }
+
+    public function select_field( $args ) {
+        $options = get_option( 'easyfonts_options', [] );
+        $id = $args['label_for'];
+        $current = ! empty( $options[ $id ] ) ? $options[ $id ] : 'none';
+        $choices = [
+            'none'     => __( 'Disabled', 'easyfonts' ),
+            'auto'     => 'auto',
+            'block'    => 'block',
+            'swap'     => 'swap',
+            'fallback' => 'fallback',
+            'optional' => 'optional',
+        ];
+        echo '<select name="easyfonts_options[' . esc_attr( $id ) . ']" id="easyfonts_options[' . esc_attr( $id ) . ']" class="easyfonts-select">';
+        foreach ( $choices as $val => $label ) {
+            $selected = selected( $current, $val, false );
+            echo '<option value="' . esc_attr( $val ) . '" ' . $selected . '>' . esc_html( $label ) . '</option>';
+        }
+        echo '</select>';
         if ( ! empty( $args['desc'] ) ) {
             echo '<p class="description">' . wp_kses_post( $args['desc'] ) . '</p>';
         }
@@ -70,7 +95,7 @@ class EasyFonts_Options {
                 <?php endif; ?>
             </form>
             <?php
-            if ( ! empty( $options['host_link'] ) || ! empty( $options['host_import'] ) ) {
+            if ( ! empty( $options['host_link'] ) || ! empty( $options['host_import'] ) || ! empty( $options['combine_fonts'] ) ) {
                 $this->list_styles();
             }
             ?>
@@ -135,75 +160,84 @@ class EasyFonts_Options {
 	
 
     private function list_styles() {
+        $options = get_option( 'easyfonts_options', [] );
+        $combine_enabled = ! empty( $options['combine_fonts'] );
         $css_files = [];
         $style_data = [];
-        try {
-            if ( ! is_dir( EASYFONTS_UPLOAD_DIR ) ) {
-                throw new Exception( __( 'Please make sure to preload the font or visit the homepage.', 'easyfonts' ) );
+
+        if ( ! is_dir( EASYFONTS_UPLOAD_DIR ) ) {
+            echo '<p>' . esc_html__( 'Fonts styles are not found. Preload the font first or visit the homepage.', 'easyfonts' ) . '</p>';
+            return;
+        }
+        $dir = new DirectoryIterator( EASYFONTS_UPLOAD_DIR );
+        foreach ( $dir as $file ) {
+            if ( ! $file->isFile() || $file->getExtension() !== 'css' ) {
+                continue;
             }
-            $dir = new DirectoryIterator( EASYFONTS_UPLOAD_DIR );
-            foreach ( $dir as $file ) {
-                if ( ! $file->isFile() || $file->getExtension() !== 'css' ) {
-                    continue;
-                }
-                $css_files[] = $file->getFilename();
+            $fname = $file->getFilename();
+            // When combine is enabled, only show combined file
+            if ( $combine_enabled && strpos( $fname, '_combined.css' ) === false ) {
+                continue;
             }
-            if ( empty( $css_files ) ) {
-                echo '<p>' . esc_html__( 'Fonts styles are not found. Preload the font first or visit the homepage.', 'easyfonts' ) . '</p>';
-                return;
+            // When combine is disabled, skip combined files
+            if ( ! $combine_enabled && strpos( $fname, '_combined.css' ) !== false ) {
+                continue;
             }
-            foreach ( $css_files as $file_name ) {
-                if ( strpos( $file_name, '..' ) !== false ) {
-                    continue;
+            $css_files[] = $fname;
+        }
+        if ( empty( $css_files ) ) {
+            echo '<p>' . esc_html__( 'Fonts styles are not found. Preload the font first or visit the homepage.', 'easyfonts' ) . '</p>';
+            return;
+        }
+        foreach ( $css_files as $file_name ) {
+            if ( strpos( $file_name, '..' ) !== false ) {
+                continue;
+            }
+            $file_path = EASYFONTS_UPLOAD_DIR . '/' . $file_name;
+            if ( ! is_readable( $file_path ) ) {
+                continue;
+            }
+            $file_content = file_get_contents( $file_path );
+            $font_family = [];
+            $variant_italic = [];
+            $variant_normal = [];
+            preg_match_all( '/@font-face\s*{[^}]+}/', $file_content, $matches );
+            if ( empty( $matches[0] ) ) {
+                continue;
+            }
+            foreach ( $matches[0] as $font_face ) {
+                if ( preg_match( '/font-family:\s*[\'"]?([^;\'"]+)[\'"]?;/', $font_face, $family_match ) ) {
+                    $font_family[] = trim( $family_match[1] );
                 }
-                $file_path = EASYFONTS_UPLOAD_DIR . '/' . $file_name;
-                if ( ! is_readable( $file_path ) ) {
-                    continue;
-                }
-                $file_content = file_get_contents( $file_path );
-                $font_family = [];
-                $variant_italic = [];
-                $variant_normal = [];
-                preg_match_all( '/@font-face\s*{[^}]+}/', $file_content, $matches );
-                if ( empty( $matches[0] ) ) {
-                    continue;
-                }
-                foreach ( $matches[0] as $font_face ) {
-                    if ( preg_match( '/font-family:\s*[\'"]?([^;\'"]+)[\'"]?;/', $font_face, $family_match ) ) {
-                        $font_family[] = trim( $family_match[1] );
-                    }
-                    if ( preg_match( '/font-style:\s*([^;]+);/', $font_face, $style_match ) ) {
-                        $style = trim( $style_match[1] );
-                        if ( preg_match( '/font-weight:\s*([^;]+);/', $font_face, $weight_match ) ) {
-                            $weight = trim( $weight_match[1] );
-                            if ( $style === 'italic' ) {
-                                $variant_italic[] = $weight;
-                            } elseif ( $style === 'normal' ) {
-                                $variant_normal[] = $weight;
-                            }
+                if ( preg_match( '/font-style:\s*([^;]+);/', $font_face, $style_match ) ) {
+                    $style = trim( $style_match[1] );
+                    if ( preg_match( '/font-weight:\s*([^;]+);/', $font_face, $weight_match ) ) {
+                        $weight = trim( $weight_match[1] );
+                        if ( $style === 'italic' ) {
+                            $variant_italic[] = $weight;
+                        } elseif ( $style === 'normal' ) {
+                            $variant_normal[] = $weight;
                         }
                     }
                 }
-                $font_family = array_unique( $font_family );
-                $variant_italic = array_unique( $variant_italic );
-                $variant_normal = array_unique( $variant_normal );
-                $style_data[] = [
-                    'file_url' => esc_url( EASYFONTS_UPLOAD_URL . '/' . $file_name ),
-                    'font_families' => esc_html( implode( ', ', $font_family ) ),
-                    'variant' => esc_html( 'italic: ' . implode( ', ', $variant_italic ) . ' | normal: ' . implode( ', ', $variant_normal ) ),
-                ];
             }
-            if ( empty( $style_data ) ) {
-                return;
-            }
-            echo '<table class="styled-table"><thead><tr><th>' . esc_html__( 'Hosted Fonts CSS URL', 'easyfonts' ) . '</th><th>' . esc_html__( 'Font Families', 'easyfonts' ) . '</th><th>' . esc_html__( 'Variants', 'easyfonts' ) . '</th></tr></thead><tbody>';
-            foreach ( $style_data as $style ) {
-                echo '<tr><td><a href="' . $style['file_url'] . '" target="_blank" rel="noopener">' . $style['file_url'] . '</a></td><td>' . $style['font_families'] . '</td><td>' . $style['variant'] . '</td></tr>';
-            }
-            echo '</tbody></table>';
-        } catch ( Exception $e ) {
-            echo '<div class="error-message">' . esc_html__( 'Error: ', 'easyfonts' ) . esc_html( $e->getMessage() ) . '</div>';
+            $font_family = array_unique( $font_family );
+            $variant_italic = array_unique( $variant_italic );
+            $variant_normal = array_unique( $variant_normal );
+            $style_data[] = [
+                'file_url' => esc_url( EASYFONTS_UPLOAD_URL . '/' . $file_name ),
+                'font_families' => esc_html( implode( ', ', $font_family ) ),
+                'variant' => esc_html( 'italic: ' . implode( ', ', $variant_italic ) . ' | normal: ' . implode( ', ', $variant_normal ) ),
+            ];
         }
+        if ( empty( $style_data ) ) {
+            return;
+        }
+        echo '<table class="styled-table"><thead><tr><th>' . esc_html__( 'Hosted Fonts CSS URL', 'easyfonts' ) . '</th><th>' . esc_html__( 'Font Families', 'easyfonts' ) . '</th><th>' . esc_html__( 'Variants', 'easyfonts' ) . '</th></tr></thead><tbody>';
+        foreach ( $style_data as $style ) {
+            echo '<tr><td><a href="' . $style['file_url'] . '" target="_blank" rel="noopener">' . $style['file_url'] . '</a></td><td>' . $style['font_families'] . '</td><td>' . $style['variant'] . '</td></tr>';
+        }
+        echo '</tbody></table>';
     }
 	public function enqueue_speed_check_assets( $hook ) {
     if ( 'settings_page_easyfonts' !== $hook ) {

@@ -3,7 +3,7 @@
  * Plugin Name: EasyFonts
  * Plugin URI: https://easywpstuff.com
  * Description: Automatically Host existing google fonts locally on your server
- * Version: 1.2.0
+ * Version: 1.3.0
  * Author: Uzair
  * Author URI: https://easywpstuff.com
  * License: GPL2
@@ -14,7 +14,7 @@ if ( ! defined( 'WPINC' ) ) {
     die;
 }
 
-define( 'EASYFONTS_VERSION', '1.2.0' );
+define( 'EASYFONTS_VERSION', '1.3.0' );
 define( 'EASYFONTS_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'EASYFONTS_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'EASYFONTS_UPLOAD_DIR', wp_upload_dir()['basedir'] . '/easyfonts' );
@@ -35,6 +35,7 @@ class EasyFonts {
         add_action( 'template_redirect', [ $this, 'maybe_start_buffering' ] );
         add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_options_styles' ] );
         add_filter( 'plugin_action_links_' . plugin_basename( __FILE__ ), [ $this, 'add_settings_link' ] );
+        add_action( 'update_option_easyfonts_options', [ $this, 'auto_clear_cache' ], 10, 0 );
         register_uninstall_hook( __FILE__, [ __CLASS__, 'uninstall' ] );
     }
 
@@ -66,7 +67,7 @@ class EasyFonts {
 
     private function should_process() {
         $options = get_option( 'easyfonts_options', [] );
-        return ! empty( $options['host_link'] ) || ! empty( $options['host_import'] ) || ! empty( $options['process_fontface'] ) || ! empty( $options['remove_hints'] ) || ! empty( $options['remove_scripts'] );
+        return ! empty( $options['host_link'] ) || ! empty( $options['host_import'] ) || ! empty( $options['process_fontface'] ) || ! empty( $options['remove_hints'] ) || ! empty( $options['remove_scripts'] ) || ! empty( $options['combine_fonts'] ) || ( ! empty( $options['font_display'] ) && $options['font_display'] !== 'none' );
     }
 
     public function combined_callback( $buffer ) {
@@ -86,6 +87,12 @@ class EasyFonts {
         }
         if ( ! empty( $options['remove_scripts'] ) ) {
             $buffer = $this->remove_font_scripts( $buffer );
+        }
+        if ( ! empty( $options['font_display'] ) && $options['font_display'] !== 'none' ) {
+            $buffer = $this->apply_font_display( $buffer, $options['font_display'] );
+        }
+        if ( ! empty( $options['combine_fonts'] ) ) {
+            $buffer = $this->combine_font_styles( $buffer );
         }
 
         return $buffer;
@@ -107,12 +114,22 @@ class EasyFonts {
      */
     private function get_remote_file( $url ) {
         $response = wp_remote_get( $url, [
-            'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
+            // Updated to a modern Chrome User-Agent so Google returns Variable Fonts
+            'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         ] );
+        
         if ( is_wp_error( $response ) ) {
             error_log( __( 'EasyFonts remote fetch error: ', 'easyfonts' ) . $response->get_error_message() );
             return false;
         }
+
+        // Ensure the remote server actually returned the file successfully
+        $response_code = wp_remote_retrieve_response_code( $response );
+        if ( $response_code !== 200 ) {
+            error_log( __( 'EasyFonts remote fetch error: HTTP ' . $response_code . ' for URL ' . $url, 'easyfonts' ) );
+            return false;
+        }
+
         return wp_remote_retrieve_body( $response );
     }
 
@@ -302,6 +319,163 @@ class EasyFonts {
         return $content;
     }
 
+    /**
+     * Apply font-display property to all @font-face declarations in buffer and local CSS files.
+     *
+     * @param string $buffer HTML buffer.
+     * @param string $value  font-display value.
+     * @return string
+     */
+    private function apply_font_display( $buffer, $value ) {
+        $allowed = [ 'auto', 'block', 'swap', 'fallback', 'optional' ];
+        if ( ! in_array( $value, $allowed, true ) ) {
+            return $buffer;
+        }
+        $buffer = $this->inject_font_display_in_css( $buffer, $value );
+        // Also patch local CSS files in upload dir
+        if ( is_dir( EASYFONTS_UPLOAD_DIR ) ) {
+            $dir = new DirectoryIterator( EASYFONTS_UPLOAD_DIR );
+            foreach ( $dir as $file ) {
+                if ( ! $file->isFile() || $file->getExtension() !== 'css' ) {
+                    continue;
+                }
+                $path = $file->getRealPath();
+                $css  = file_get_contents( $path );
+                $patched = $this->inject_font_display_in_css( $css, $value );
+                if ( $patched !== $css ) {
+                    file_put_contents( $path, $patched );
+                }
+            }
+        }
+        return $buffer;
+    }
+
+    /**
+     * Replace or inject font-display in all @font-face blocks within CSS string.
+     */
+    private function inject_font_display_in_css( $css, $value ) {
+        return preg_replace_callback(
+            '/@font-face\s*\{([^}]+)\}/',
+            function ( $m ) use ( $value ) {
+                $body = $m[1];
+                if ( preg_match( '/font-display\s*:\s*[^;]+;/', $body ) ) {
+                    $body = preg_replace( '/font-display\s*:\s*[^;]+;/', 'font-display: ' . $value . ';', $body );
+                } else {
+                    $body = rtrim( $body ) . "\n  font-display: " . $value . ";\n";
+                }
+                return '@font-face {' . $body . '}';
+            },
+            $css
+        );
+    }
+
+    /**
+     * Combine all locally hosted font CSS into one file, remove originals, inject after <body>.
+     *
+     * Collects @font-face from:
+     * - <link> tags pointing to easyfonts CSS files
+     * - @import rules inside <style> pointing to easyfonts CSS files
+     * - Inline @font-face blocks inside <style> that reference easyfonts URLs
+     *
+     * Deduplicates, writes combined.css, removes originals, injects one <link> after <body>.
+     *
+     * @param string $buffer HTML buffer.
+     * @return string
+     */
+    /**
+     * Combine page-specific font CSS into one file, remove originals, inject after <body>.
+     *
+     * @param string $buffer HTML buffer.
+     * @return string
+     */
+    private function combine_font_styles( $buffer ) {
+        if ( ! is_dir( EASYFONTS_UPLOAD_DIR ) ) {
+            return $buffer;
+        }
+
+        $upload_url = preg_quote( EASYFONTS_UPLOAD_URL, '/' );
+        $upload_url_plain = EASYFONTS_UPLOAD_URL;
+        $all_blocks  = [];
+        $seen_hashes = [];
+
+        $collect_block = function ( $block ) use ( &$all_blocks, &$seen_hashes ) {
+            $key = '';
+            if ( preg_match( '/src\s*:\s*url\([\'"]?([^\)\'\"]+)[\'"]?\)/i', $block, $url_m ) ) {
+                $key .= trim( $url_m[1] );
+            }
+            if ( preg_match( '/font-family\s*:\s*[\'"]?([^;\'"]+)/i', $block, $fam_m ) ) {
+                $key .= '|' . preg_replace( '/\s+/', '', trim( $fam_m[1] ) );
+            }
+            if ( preg_match( '/font-weight\s*:\s*([^;]+)/i', $block, $w_m ) ) {
+                $key .= '|' . trim( $w_m[1] );
+            }
+            if ( preg_match( '/font-style\s*:\s*([^;]+)/i', $block, $s_m ) ) {
+                $key .= '|' . trim( $s_m[1] );
+            }
+            $hash = md5( $key );
+            if ( ! isset( $seen_hashes[ $hash ] ) ) {
+                $seen_hashes[ $hash ] = true;
+                $all_blocks[] = $block;
+            }
+        };
+
+        // 1. Collect from <link> tags injected into the buffer
+        if ( preg_match_all( '/<link[^>]+href=["\'](' . $upload_url . '\/([a-f0-9]{10}\.css))["\'][^>]*>/i', $buffer, $link_matches ) ) {
+            foreach ( $link_matches[2] as $filename ) {
+                $local_path = EASYFONTS_UPLOAD_DIR . '/' . $filename;
+                if ( file_exists( $local_path ) ) {
+                    $css = file_get_contents( $local_path );
+                    if ( preg_match_all( '/@font-face\s*\{[^}]+\}/iu', $css, $matches ) ) {
+                        foreach ( $matches[0] as $block ) {
+                            $collect_block( $block );
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Globally extract and remove inline @font-face blocks (Bypasses <style> PCRE limits!)
+        $buffer = preg_replace_callback(
+            '/@font-face\s*\{[^}]+\}/iu',
+            function ( $m ) use ( $upload_url_plain, $collect_block ) {
+                if ( strpos( $m[0], $upload_url_plain ) !== false ) {
+                    $collect_block( $m[0] );
+                    return ''; // Deletes the block from the HTML buffer
+                }
+                return $m[0];
+            },
+            $buffer
+        );
+
+        // 3. Remove @import rules pointing to easyfonts globally
+        $buffer = preg_replace( '/@import\s+(?:url\()?["\']?' . $upload_url . '\/[a-f0-9]{10}\.css["\']?\)?(?:[^;]*);?\s*/i', '', $buffer );
+
+        if ( empty( $all_blocks ) ) {
+            return $buffer;
+        }
+
+        // 4. Write page-specific combined file
+        $combined_content = implode( "\n\n", $all_blocks );
+        $combined_hash    = substr( hash( 'sha256', $combined_content ), 0, 10 );
+        $combined_name    = $combined_hash . '_combined.css';
+        $combined_path    = EASYFONTS_UPLOAD_DIR . '/' . $combined_name;
+        $combined_url     = EASYFONTS_UPLOAD_URL . '/' . $combined_name;
+
+        if ( ! file_exists( $combined_path ) ) {
+            file_put_contents( $combined_path, $combined_content );
+        }
+
+        // 5. Clean up old <link> tags and empty <style> tags left behind
+        $buffer = preg_replace( '/<link[^>]+href=["\']' . $upload_url . '\/[a-f0-9]{10}\.css["\'][^>]*\/?>\s*/i', '', $buffer );
+        $buffer = preg_replace( '/<style[^>]*>\s*<\/style>/i', '', $buffer );
+
+        // 6. Inject the single page-specific <link>
+        $link_tag = '<link rel="stylesheet" href="' . esc_url( $combined_url ) . '" type="text/css" media="all" />' . "\n";
+        $buffer = preg_replace( '/(<body[^>]*>)/i', '$1' . "\n" . $link_tag, $buffer, 1 );
+
+        return $buffer;
+    }
+
     public function enqueue_options_styles() {
         if ( 'settings_page_easyfonts' === get_current_screen()->id ) {
             wp_enqueue_style( 'easyfonts-options-styles', EASYFONTS_PLUGIN_URL . 'assets/style.css', [], EASYFONTS_VERSION );
@@ -312,6 +486,21 @@ class EasyFonts {
         $settings_link = '<a href="options-general.php?page=easyfonts">' . __( 'Settings', 'easyfonts' ) . '</a>';
         array_unshift( $links, $settings_link );
         return $links;
+    }
+
+    /**
+     * Auto-clear font cache when settings are saved.
+     */
+    public function auto_clear_cache() {
+        $dir = EASYFONTS_UPLOAD_DIR;
+        if ( is_dir( $dir ) ) {
+            $files = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $dir, RecursiveDirectoryIterator::SKIP_DOTS ), RecursiveIteratorIterator::CHILD_FIRST );
+            foreach ( $files as $fileinfo ) {
+                $todo = ( $fileinfo->isDir() ? 'rmdir' : 'unlink' );
+                $todo( $fileinfo->getRealPath() );
+            }
+            rmdir( $dir );
+        }
     }
 
     public static function uninstall() {
