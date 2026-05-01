@@ -1,5 +1,5 @@
 === EasyFonts – Host Google Fonts Locally, GDPR Compliant, Faster Loading ===
-Contributors: uzair
+Contributors: easywpstuff
 Tags: google fonts, local google fonts, disable google fonts, gdpr, core web vitals
 Requires at least: 5.0
 Tested up to: 7.0
