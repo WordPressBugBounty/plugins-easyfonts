@@ -15,6 +15,7 @@ namespace EasyFonts\Frontend;
 use EasyFonts\Detect\Consolidator;
 use EasyFonts\Detect\Pipeline;
 use EasyFonts\Detect\Providers;
+use EasyFonts\Fonts\Downloader;
 use EasyFonts\Fonts\Storage;
 use EasyFonts\Fonts\UsageTracker;
 use EasyFonts\Settings;
@@ -91,6 +92,11 @@ class OutputBuffer {
 		$this->pipeline = new Pipeline();
 		$this->force    = $this->is_probe();
 
+		// Only warm (probe) requests may download font binaries. A normal visitor
+		// render serves cached fonts only and never blocks on remote downloads —
+		// this is the core fix for the output-buffer stall / white screen.
+		Downloader::set_allow_fonts( $this->force );
+
 		ob_start( array( $this, 'process' ) );
 	}
 
@@ -105,29 +111,96 @@ class OutputBuffer {
 			return $buffer;
 		}
 
-		// 1. Detect + localise (pipeline; force-all in probe mode). The
-		//    consolidated stylesheet is recorded but NOT injected yet, so we can
-		//    place preloads above it.
-		$buffer = $this->pipeline->process( $buffer, $this->force );
+		$original = $buffer;
 
-		// 2. Strip now-useless Google resource hints.
-		if ( Settings::get( 'strip_hints', 1 ) ) {
-			$stripped = $this->html->strip_font_hints( $buffer, Providers::hint_hosts() );
-			$buffer   = $stripped['html'];
+		try {
+			// 1. Detect + localise. The consolidator is transactional: it only
+			//    rewrites the page when every font it needs is already hosted
+			//    locally; otherwise it returns the page untouched and flags a warm.
+			$buffer = $this->pipeline->process( $buffer, $this->force );
+
+			// Did we actually commit a localization this run (consolidated sheet
+			// and/or an in-place local stylesheet rewrite)?
+			$localized = Consolidator::localized();
+
+			if ( $localized ) {
+				// 2. Strip now-useless Google resource hints (only when we've
+				//    actually localised — otherwise the page still uses the
+				//    provider and needs its preconnect/dns-prefetch hints).
+				if ( Settings::get( 'strip_hints', 1 ) ) {
+					$stripped = $this->html->strip_font_hints( $buffer, Providers::hint_hosts() );
+					$buffer   = $stripped['html'];
+				}
+
+				// 3. Inject preloads → consolidated stylesheet → metric fallbacks.
+				$head = $this->build_head();
+
+				if ( '' !== $head ) {
+					$buffer = $this->html->before_head_close( $buffer, $head );
+				}
+
+				// 4. Log what we hosted this request (origin=buffer).
+				$this->log_usage();
+			}
+
+			// Fail-safe: never hand back an empty document.
+			if ( '' === $buffer ) {
+				$buffer = $original;
+			}
+		} catch ( \Throwable $e ) {
+			// Whatever went wrong, never white-screen the site: return the page
+			// exactly as it came in.
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				error_log( 'EasyFonts: output buffer failed — ' . $e->getMessage() ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions
+			}
+
+			$buffer = $original;
 		}
 
-		// 3. Inject the head block in the right order:
-		//    preloads → consolidated stylesheet → metric fallbacks.
-		$head = $this->build_head();
-
-		if ( '' !== $head ) {
-			$buffer = $this->html->before_head_close( $buffer, $head );
+		// If the page needs fonts that aren't cached yet, warm the cache in the
+		// background via a non-blocking loopback (no wp-cron). Never from a warm
+		// request itself (avoids loops).
+		if ( ! $this->force && Consolidator::needs_warm() ) {
+			$this->schedule_warm();
 		}
-
-		// 4. Log what we hosted this request (origin=buffer).
-		$this->log_usage();
 
 		return $buffer;
+	}
+
+	/**
+	 * Spawn a single non-blocking loopback request that warms the cache for the
+	 * current URL (downloads the missing fonts off the visitor's render path).
+	 * Rate-limited per URL so a burst of traffic can't fan out into many self
+	 * requests. No wp-cron involved.
+	 */
+	private function schedule_warm(): void {
+		$url  = home_url( add_query_arg( array() ) );
+		$lock = 'easyfonts_warm_' . md5( $url );
+
+		// One in-flight warm per URL at a time.
+		if ( get_transient( $lock ) ) {
+			return;
+		}
+
+		set_transient( $lock, 1, 60 );
+
+		$target = add_query_arg(
+			array(
+				'easyfonts_probe' => Settings::warm_key(),
+				'efbust'          => (string) time(),
+			),
+			$url
+		);
+
+		wp_remote_get(
+			$target,
+			array(
+				'blocking'  => false,
+				'timeout'   => 0.01,
+				'sslverify' => (bool) apply_filters( 'easyfonts_loopback_sslverify', true ),
+				'headers'   => array( 'X-EasyFonts-Warm' => '1' ),
+			)
+		);
 	}
 
 	/**
@@ -220,14 +293,25 @@ class OutputBuffer {
 	 * @return string
 	 */
 	private function minify_css( string $css ): string {
+		$input = $css;
+
 		// Remove /* ... */ comments (incl. the generated banner).
-		$css = (string) preg_replace( '#/\*.*?\*/#s', '', $css );
+		$css = preg_replace( '#/\*.*?\*/#s', '', $css );
+		if ( ! is_string( $css ) ) {
+			return $input;
+		}
 
 		// Collapse all runs of whitespace to a single space.
-		$css = (string) preg_replace( '/\s+/', ' ', $css );
+		$css = preg_replace( '/\s+/', ' ', $css );
+		if ( ! is_string( $css ) ) {
+			return $input;
+		}
 
 		// Drop spaces around structural punctuation.
-		$css = (string) preg_replace( '/\s*([{};:,>])\s*/', '$1', $css );
+		$css = preg_replace( '/\s*([{};:,>])\s*/', '$1', $css );
+		if ( ! is_string( $css ) ) {
+			return $input;
+		}
 
 		// Remove the last semicolon before a closing brace, and any leftover gaps.
 		$css = str_replace( ';}', '}', $css );
@@ -355,12 +439,27 @@ class OutputBuffer {
 	}
 
 	/**
-	 * Admin-triggered probe: ?easyfonts_probe=1 (force a full uncached pass).
+	 * Is this a "warm" (probe) request that may download fonts and force a full
+	 * uncached pass? Authorised either by an admin (?easyfonts_probe=1 in the
+	 * browser) or by the secret warm key (used by the background loopback, the
+	 * admin "Optimize" action and WP-CLI). The key path lets an unauthenticated
+	 * self-request be trusted without wp-cron.
 	 *
 	 * @return bool
 	 */
 	private function is_probe(): bool {
-		return isset( $_GET['easyfonts_probe'] ) && current_user_can( 'manage_options' ); // phpcs:ignore WordPress.Security.NonceVerification
+		if ( ! isset( $_GET['easyfonts_probe'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification
+			return false;
+		}
+
+		if ( current_user_can( 'manage_options' ) ) {
+			return true;
+		}
+
+		$provided = (string) wp_unslash( $_GET['easyfonts_probe'] ); // phpcs:ignore WordPress.Security.NonceVerification
+		$key      = (string) get_option( 'easyfonts_warm_key', '' );
+
+		return '' !== $key && hash_equals( $key, $provided );
 	}
 
 	/**

@@ -93,6 +93,57 @@ class Consolidator {
 	private array $contributed = array();
 
 	/**
+	 * Set true when an enabled variant the page needs is NOT yet cached and we
+	 * couldn't download it on this request (visitor render = downloads disabled,
+	 * or warm-budget exhausted). When true, run() leaves the page untouched and
+	 * signals a background warm so the cache fills off the render path.
+	 *
+	 * @var bool
+	 */
+	private bool $missing = false;
+
+	/**
+	 * Number of local/external stylesheets rewritten in place to cleaned copies
+	 * this request (independent of the consolidated provider stylesheet).
+	 *
+	 * @var int
+	 */
+	private int $local_rewrites = 0;
+
+	/**
+	 * Font binaries downloaded so far this request (warm-budget counter).
+	 *
+	 * @var int
+	 */
+	private int $dl_count = 0;
+
+	/**
+	 * Monotonic start time of the first download this request (warm budget).
+	 *
+	 * @var float
+	 */
+	private float $dl_started = 0.0;
+
+	/**
+	 * True when the most recent run found enabled fonts that aren't cached yet
+	 * and downloads were disabled (visitor render) — i.e. a background warm is
+	 * needed. Read by the output buffer to spawn a non-blocking loopback.
+	 *
+	 * @var bool
+	 */
+	private static bool $needs_warm = false;
+
+	/**
+	 * True when the most recent run actually committed a localization (a
+	 * consolidated stylesheet and/or an in-place local stylesheet rewrite). The
+	 * output buffer uses this to decide whether to inject head markup / strip
+	 * resource hints.
+	 *
+	 * @var bool
+	 */
+	private static bool $localized = false;
+
+	/**
 	 * Variants hosted this request (for fallbacks + usage logging).
 	 *
 	 * @var array<int,array{family:string,weight:string,style:string}>
@@ -121,6 +172,27 @@ class Consolidator {
 	 */
 	public static function touched(): array {
 		return self::$touched;
+	}
+
+	/**
+	 * Does the current page need a background cache-warm? True when an enabled
+	 * font isn't cached yet and downloads were disabled for this (visitor)
+	 * render.
+	 *
+	 * @return bool
+	 */
+	public static function needs_warm(): bool {
+		return self::$needs_warm;
+	}
+
+	/**
+	 * Did the most recent run commit a localization (so the output buffer should
+	 * inject preloads/fallbacks and strip provider hints)?
+	 *
+	 * @return bool
+	 */
+	public static function localized(): bool {
+		return self::$localized;
 	}
 
 	/**
@@ -157,6 +229,14 @@ class Consolidator {
 	/**
 	 * Run the full consolidation pass over a document.
 	 *
+	 * Transactional + fail-safe: detection/rewriting happens on a working copy.
+	 * The rewritten page is only returned ("committed") when EVERY enabled font
+	 * it needs is already served locally. If any needed font isn't cached yet and
+	 * downloads are disabled for this request (a normal visitor render never
+	 * downloads — that's what used to stall and white-screen the site), the
+	 * ORIGINAL page is returned unchanged (so the original Google Fonts keep
+	 * working — no FOUC, no missing text) and a background warm is flagged.
+	 *
 	 * @param string $html  Full HTML.
 	 * @param bool   $force Reserved (probe mode); detection is identical.
 	 * @return string
@@ -164,46 +244,130 @@ class Consolidator {
 	public function run( string $html, bool $force = false ): string {
 		unset( $force );
 
+		$original = $html;
+
 		self::$stylesheet_url  = '';
 		self::$stylesheet_file = '';
+		self::$needs_warm      = false;
+		self::$localized       = false;
+		$this->missing         = false;
+		$this->local_rewrites  = 0;
 
-		// 1. COLLECT (each step may rewrite the HTML — e.g. strip inline blocks).
-		$html = $this->collect_from_links( $html );
-		$html = $this->collect_from_inline( $html );
-		$html = $this->collect_from_webfont( $html );
+		// 1. COLLECT (each step may rewrite the working HTML — e.g. strip inline
+		//    blocks, or rewrite a theme stylesheet to a cleaned local copy). We
+		//    keep the untouched $original to fall back to.
+		$working = $this->collect_from_links( $html );
+		$working = $this->collect_from_inline( $working );
+		$working = $this->collect_from_webfont( $working );
 		$this->collect_async_urls();
 
-		// Physically remove the provider <link> tags we flagged.
-		$html = $this->html->remove_stylesheet_links( $html, array_values( array_unique( $this->remove_links ) ) );
-
-		if ( empty( $this->css_urls ) && empty( $this->raw_blocks ) ) {
-			return $html;
+		// Backstop: nothing in collection may ever blank the document. If a step
+		// somehow emptied a non-empty page, discard the working copy entirely.
+		if ( '' === $working && '' !== $original ) {
+			return $original;
 		}
 
-		// 2. AGGREGATE.
-		$variants = $this->aggregate();
+		$has_provider = ! empty( $this->css_urls ) || ! empty( $this->raw_blocks );
 
-		if ( empty( $variants ) ) {
-			return $html;
+		// Nothing font-related found at all → return the page untouched.
+		if ( ! $has_provider && 0 === $this->local_rewrites ) {
+			return $original;
 		}
 
-		// 3. HOST (register + build the consolidated stylesheet).
-		$file_url = $this->host( $variants );
+		// 2. AGGREGATE + 3. HOST the consolidated (provider <link> / inline) set.
+		//    Downloads only happen here when allowed (admin/CLI/warm); on a
+		//    visitor render the missing flag is set instead.
+		$file_url = null;
 
-		if ( null === $file_url ) {
-			return $html;
+		if ( $has_provider ) {
+			$variants = $this->aggregate();
+
+			if ( ! empty( $variants ) ) {
+				$file_url = $this->host( $variants );
+			}
 		}
 
-		// Record for the output buffer, which injects preloads + the stylesheet
-		// + fallbacks together in the correct order. (We don't inject here so the
-		// preloads can be positioned ABOVE the stylesheet.)
-		self::$stylesheet_url = $file_url;
+		// If ANY enabled font the page needs isn't served locally yet, don't touch
+		// the page — keep the originals working and warm the cache in background.
+		if ( $this->missing ) {
+			return $this->bail( $original );
+		}
+
+		// Nothing actually localized (no consolidated sheet built and no local
+		// stylesheet rewritten) → return the page untouched.
+		if ( null === $file_url && 0 === $this->local_rewrites ) {
+			return $this->bail( $original );
+		}
+
+		// Everything needed is hosted locally. Physically remove the provider
+		// <link> tags we flagged — but only when we built a consolidated
+		// replacement for them (otherwise leave them, so we never drop fonts).
+		if ( null !== $file_url ) {
+			$working              = $this->html->remove_stylesheet_links( $working, array_values( array_unique( $this->remove_links ) ) );
+			self::$stylesheet_url = $file_url;
+		}
+
+		self::$localized = true;
 
 		foreach ( array_keys( $this->contributed ) as $id ) {
 			Settings::learn_detector( $id );
 		}
 
-		return $html;
+		return $working;
+	}
+
+	/**
+	 * Abort the rewrite: clear any partial output state and return the page
+	 * exactly as it came in. If fonts are missing only because downloads were
+	 * disabled (visitor render), flag a background warm.
+	 *
+	 * @param string $original Untouched HTML.
+	 * @return string
+	 */
+	private function bail( string $original ): string {
+		self::$stylesheet_url  = '';
+		self::$stylesheet_file = '';
+		self::$touched         = array();
+
+		if ( $this->missing && ! Downloader::fonts_allowed() ) {
+			self::$needs_warm = true;
+		}
+
+		return $original;
+	}
+
+	/**
+	 * Warm-download budget: bounds how much a single warm (probe) request will
+	 * fetch, so it can't run long enough to hit max_execution_time. Anything left
+	 * over is fetched by the next warm. Always true when downloads are disabled
+	 * (the caller handles that case via the missing flag).
+	 *
+	 * @return bool
+	 */
+	private function within_budget(): bool {
+		if ( 0.0 === $this->dl_started ) {
+			$this->dl_started = microtime( true );
+		}
+
+		/**
+		 * Max font binaries to download in a single warm request.
+		 *
+		 * @param int $max
+		 */
+		$max_n = (int) apply_filters( 'easyfonts_warm_max_downloads', 25 );
+
+		/**
+		 * Max wall-clock seconds to spend downloading in a single warm request.
+		 *
+		 * @param float $max
+		 */
+		$max_s = (float) apply_filters( 'easyfonts_warm_max_seconds', 25.0 );
+
+		if ( $this->dl_count >= $max_n ) {
+			return false;
+		}
+
+		return ( microtime( true ) - $this->dl_started ) < $max_s;
 	}
 
 	/* --------------------------------------------------------------------- *
@@ -267,6 +431,7 @@ class Consolidator {
 				}
 
 				$this->mark( $detector );
+				$this->local_rewrites++;
 
 				return add_query_arg( 'ver', Settings::buster(), $this->storage->url( $filename ) );
 			}
@@ -290,7 +455,7 @@ class Consolidator {
 				$original = $css;
 
 				// Provider @import → collect + remove the statement.
-				$css = (string) preg_replace_callback(
+				$replaced = preg_replace_callback(
 					'/@import\s+(?:url\(\s*)?[\'"]?([^\'")\s]+)[\'"]?\s*\)?\s*;?/i',
 					function ( $m ) {
 						$url = Providers::normalize_url( $m[1] );
@@ -304,6 +469,7 @@ class Consolidator {
 					},
 					$css
 				);
+				$css      = is_string( $replaced ) ? $replaced : $original;
 
 				// Remote @font-face → collect raw block + remove it.
 				$blocks = $this->parser->blocks( $css );
@@ -399,9 +565,49 @@ class Consolidator {
 		$this->add_css_url( $url, 'webfont' );
 		$this->mark( 'webfont' );
 
-		// Remove webfont.js loader scripts + the WebFontConfig block.
-		$html = (string) preg_replace( '#<script\b[^>]*\bsrc=[\'"][^\'"]*webfont(?:\.min)?\.js[\'"][^>]*>\s*</script>#i', '', $html );
-		$html = (string) preg_replace( '#<script\b[^>]*>(?:(?!</script>).)*?WebFontConfig(?:(?!</script>).)*?</script>#is', '', $html );
+		// Remove webfont.js loader scripts + the WebFontConfig block. The src
+		// pattern uses bounded character classes (safe); null-guard it anyway so a
+		// PCRE failure can never blank the page. The WebFontConfig block is removed
+		// by a linear scan instead of a tempered-dot regex — that regex hit the
+		// PCRE2 JIT stack limit on ordinary inline scripts and blanked the page.
+		$stripped = preg_replace( '#<script\b[^>]*\bsrc=[\'"][^\'"]*webfont(?:\.min)?\.js[\'"][^>]*>\s*</script>#i', '', $html );
+		$html     = is_string( $stripped ) ? $stripped : $html;
+		$html     = $this->remove_script_block_containing( $html, 'WebFontConfig' );
+
+		return $html;
+	}
+
+	/**
+	 * Remove any <script>…</script> block whose contents contain $needle, using a
+	 * linear strpos scan (no regex → no catastrophic backtracking / JIT crash).
+	 *
+	 * @param string $html   HTML.
+	 * @param string $needle Marker that must appear inside the script.
+	 * @return string
+	 */
+	private function remove_script_block_containing( string $html, string $needle ): string {
+		$offset = 0;
+
+		while ( true ) {
+			$pos = stripos( $html, $needle, $offset );
+
+			if ( false === $pos ) {
+				break;
+			}
+
+			$start = strripos( substr( $html, 0, $pos ), '<script' );
+			$gt    = false === $start ? false : strpos( $html, '>', $start );
+			$end   = stripos( $html, '</script>', $pos );
+
+			// Marker isn't inside a clean <script>…</script> wrapper → skip past it.
+			if ( false === $start || false === $gt || false === $end || $gt > $pos ) {
+				$offset = $pos + strlen( $needle );
+				continue;
+			}
+
+			$html   = substr( $html, 0, $start ) . substr( $html, $end + 9 );
+			$offset = $start;
+		}
 
 		return $html;
 	}
@@ -722,12 +928,24 @@ class Consolidator {
 			$size      = $font_file ? $this->storage->size( $font_file ) : 0;
 
 			if ( ! $is_disabled && null === $font_file ) {
-				$download = $this->downloader->fetch_font( $v['src'], $basename, $this->storage );
-
-				if ( null === $download ) {
+				// Don't download on a visitor render (downloads disabled), and
+				// don't exceed the warm budget. Either way, mark the page as not
+				// yet fully hostable so run() leaves it untouched and warms later.
+				if ( ! Downloader::fonts_allowed() || ! $this->within_budget() ) {
+					$this->missing = true;
 					continue;
 				}
 
+				$download = $this->downloader->fetch_font( $v['src'], $basename, $this->storage );
+
+				if ( null === $download ) {
+					// Genuine fetch failure — treat as missing so we don't strip
+					// the original source and leave the page without this font.
+					$this->missing = true;
+					continue;
+				}
+
+				$this->dl_count++;
 				$font_file = $download['file'];
 				$size      = $download['size'];
 			}
@@ -885,7 +1103,7 @@ class Consolidator {
 		$out       = $this->absolutize_urls( $css, $base_url );
 
 		// 1. Provider @import → fetch that CSS, localise its faces, inline it.
-		$out = (string) preg_replace_callback(
+		$imported_out = preg_replace_callback(
 			'/@import\s+(?:url\(\s*)?[\'"]?([^\'")\s]+)[\'"]?\s*\)?\s*;?/i',
 			function ( $m ) use ( &$found, $effective ) {
 				$url = Providers::normalize_url( $m[1] );
@@ -906,6 +1124,7 @@ class Consolidator {
 			},
 			$out
 		);
+		$out          = is_string( $imported_out ) ? $imported_out : $out;
 
 		// 2. Provider @font-face already in the file → localise src in place.
 		$out = $this->localize_faces_in_css( $out, $base_url, $found );
@@ -994,12 +1213,22 @@ class Consolidator {
 			$size      = $font_file ? $this->storage->size( $font_file ) : 0;
 
 			if ( null === $font_file ) {
+				// As in host(): never download on a visitor render, and honour the
+				// warm budget. Mark missing and leave the original @font-face src
+				// in place so the font keeps loading from the provider until warm.
+				if ( ! Downloader::fonts_allowed() || ! $this->within_budget() ) {
+					$this->missing = true;
+					continue;
+				}
+
 				$dl = $this->downloader->fetch_font( $src, $basename, $this->storage );
 
 				if ( null === $dl ) {
+					$this->missing = true;
 					continue; // Leave the original src if the download fails.
 				}
 
+				$this->dl_count++;
 				$font_file = $dl['file'];
 				$size      = $dl['size'];
 			}
@@ -1123,7 +1352,7 @@ class Consolidator {
 	 * @return string
 	 */
 	private function absolutize_urls( string $css, string $base_url ): string {
-		return (string) preg_replace_callback(
+		$out = preg_replace_callback(
 			'/url\(\s*([\'"]?)([^\'")]+)\1\s*\)/i',
 			function ( $m ) use ( $base_url ) {
 				$url = trim( $m[2] );
@@ -1140,6 +1369,8 @@ class Consolidator {
 			},
 			$css
 		);
+
+		return is_string( $out ) ? $out : $css;
 	}
 
 	/**

@@ -316,7 +316,14 @@ class RestApi {
 
 		foreach ( (array) $targets as $target ) {
 			// Cache-busting param forces a fresh PHP render (bypasses page cache).
-			$url = add_query_arg( 'easyfonts_probe', (string) time(), $target );
+			// The warm key authorises this unauthenticated self-request to download.
+			$url = add_query_arg(
+				array(
+					'easyfonts_probe' => Settings::warm_key(),
+					'efbust'          => (string) time(),
+				),
+				$target
+			);
 
 			$response = wp_remote_get(
 				$url,

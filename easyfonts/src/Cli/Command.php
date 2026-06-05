@@ -36,7 +36,13 @@ class Command {
 	 */
 	public function scan( array $args ): void {
 		foreach ( $args as $url ) {
-			$probe = add_query_arg( 'easyfonts_probe', '1', $url );
+			$probe = add_query_arg(
+				array(
+					'easyfonts_probe' => Settings::warm_key(),
+					'efbust'          => (string) time(),
+				),
+				$url
+			);
 
 			$response = wp_remote_get(
 				$probe,

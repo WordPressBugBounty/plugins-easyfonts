@@ -4,7 +4,7 @@ Tags: google fonts, host google fonts locally, gdpr, core web vitals, font optim
 Requires at least: 6.4
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 2.0.0
+Stable tag: 2.0.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -24,18 +24,19 @@ Unlike basic font plugins, EasyFonts doesn't just self-host blindly. It **measur
 = What EasyFonts does =
 
 * **Automatic local hosting** — Detects Google Fonts loaded via `<link>` stylesheets, `@import` rules, inline `@font-face`, **theme/plugin CSS files**, **external/CDN stylesheets**, and the **Web Font Loader (webfont.js)** — then downloads and serves them locally.
-* **Async / JS-injected font blocking** — Optionally catches Google Fonts injected by JavaScript at runtime and self-hosts them too (handles fonts most plugins miss).
+* **Combine into one stylesheet** — Merges all hosted font CSS into a single file, removes duplicate `@font-face` rules, and can **inline it as minified CSS** so it's not render-blocking.
+* **Used vs Unused font discovery** — Automatically identifies fonts that never render on real pages so you can disable unnecessary downloads and preloads.
 * **Real usage measurement** — A lightweight beacon measures which font families and weights actually render, and which appear above the fold — directly on your live pages, no loopback crawler.
 * **Smart preloading** — Auto-preloads the above-the-fold fonts that matter (capped, so you never over-preload), boosting LCP.
-* **Zero-CLS fallbacks** — Reads each font's real metrics and generates size-matched fallback faces (`size-adjust`, `ascent-override`) to eliminate layout shift while fonts load.
-* **Variable font support** — Detects and hosts modern variable fonts as a single optimized file instead of many static weights.
-* **Combine into one stylesheet** — Merges all hosted font CSS into a single file, removes duplicate `@font-face` rules, and can **inline it as minified CSS** so it's not render-blocking.
 * **font-display control** — Force `font-display: swap` (or block, fallback, optional, auto) on every face to fix "Ensure text remains visible during webfont load."
+* **Per-family & per-weight control** — Toggle Load and Preload for any family or individual weight; disable fonts you don't use.
 * **Subset trimming** — Keep only the character sets you need (Latin, Cyrillic, Greek, Vietnamese, Arabic, Devanagari, CJK and more) to cut font weight.
+* **Zero-CLS fallbacks** — Reads each font's real metrics and generates size-matched fallback faces (`size-adjust`, `ascent-override`) to eliminate layout shift while fonts load.
+* **Async / JS-injected font blocking** — Optionally catches Google Fonts injected by JavaScript at runtime and self-hosts them too (handles fonts most plugins miss).
 * **Clean resource hints** — Strips now-useless `preconnect`, `dns-prefetch`, and `preload` tags pointing at Google's servers.
+* **Variable font support** — Detects and hosts modern variable fonts as a single optimized file instead of many static weights.
 * **CDN support** — Serve hosted fonts and the stylesheet from your CDN.
 * **Bunny Fonts support** — Also self-hosts fonts from `fonts.bunny.net`.
-* **Per-family & per-weight control** — Toggle Load and Preload for any family or individual weight; disable fonts you don't use.
 * **Import / Export settings** — Move your configuration between sites in one click.
 * **Multisite ready** — Works per-site across a network, with tables created automatically for new sites.
 * **WP-CLI** — Scan and manage fonts from the command line.
@@ -116,6 +117,18 @@ Yes. It finds font stylesheets across your whole page — themes, plugins, and b
 4. Usage — what actually renders, measured in real browsers
 
 == Changelog ==
+
+
+= 2.0.1 =
+* Fixed: rare white screen / blank front-end on some hosts (esp. FastCGI/cgi-fcgi). Font binaries are no longer downloaded during a visitor's page render — they are fetched by a non-blocking background warm request, so a slow or blocked outbound connection can never stall the page.
+* Fixed: the output buffer now fails open — if anything goes wrong while optimising a page, the original HTML is always returned instead of a blank page.
+* Improved: provider <link> tags are only removed once their fonts are confirmed hosted locally, so the page never loses its fonts while the cache warms.
+* Improved: provider stylesheet CSS is cached, so font detection no longer hits the network on every page load.
+* Hardened: guard for WordPress's HTML API, safer regex handling, and PHP 7.4 compatibility shims.
+* Note: no settings, styling, or features changed. After activation (or after changing fonts) the first visit serves the original fonts for a moment while the cache warms in the background, then switches to self-hosted automatically. You can also warm immediately from Settings → Optimize.
+* Fixed: the real cause of the blank front-end — two regular expressions that scanned the whole page (the inline <style> processor and the Web Font Loader remover) could exhaust the PCRE2 engine on large pages (e.g. page-builder inline CSS or big inline scripts) and either return nothing or crash the PHP worker, blanking the page with no catchable error. Both are now linear text scans that cannot backtrack or overflow.
+* Hardened: every remaining regular expression that rewrites page/CSS content now falls back to the original content if the engine fails, so a pattern can never blank the page. Added a final safety net that discards the processed page if it ever comes out empty.
+* Added: a size cap for individual inline <style> blocks (filterable) to skip pathologically large blocks safely.
 
 = 2.0.0 =
 * New: real-browser usage measurement — see which fonts render and which are above the fold.

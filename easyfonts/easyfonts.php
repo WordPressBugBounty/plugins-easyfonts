@@ -3,8 +3,8 @@
  * Plugin Name:       Easy Fonts
  * Plugin URI:        https://fluxpress.io
  * Description:       Detect, self-host, preload, and trim Google Fonts automatically — reliably, with zero-CLS metric-matched fallbacks. Built on WordPress's native HTML API.
- * Version:           2.0.0
- * Author:            FluxPress
+ * Version:           2.0.1
+ * Author:            Uzair
  * Author URI:        https://fluxpress.io
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
@@ -18,11 +18,36 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'EASYFONTS_VERSION', '2.0.0' );
+define( 'EASYFONTS_VERSION', '2.0.2' );
 define( 'EASYFONTS_FILE', __FILE__ );
 define( 'EASYFONTS_DIR', plugin_dir_path( __FILE__ ) );
 define( 'EASYFONTS_URL', plugin_dir_url( __FILE__ ) );
 define( 'EASYFONTS_BASENAME', plugin_basename( __FILE__ ) );
+
+/**
+ * PHP 7.4 polyfills. The plugin advertises "Requires PHP: 7.4", but parts of the
+ * codebase use string helpers added in PHP 8.0. These guarded shims keep it
+ * genuinely 7.4-compatible without changing any call sites.
+ */
+if ( ! function_exists( 'str_starts_with' ) ) {
+	function str_starts_with( $haystack, $needle ): bool {
+		return '' === $needle || 0 === strncmp( (string) $haystack, (string) $needle, strlen( (string) $needle ) );
+	}
+}
+if ( ! function_exists( 'str_ends_with' ) ) {
+	function str_ends_with( $haystack, $needle ): bool {
+		if ( '' === $needle ) {
+			return true;
+		}
+		$len = strlen( (string) $needle );
+		return $len <= strlen( (string) $haystack ) && 0 === substr_compare( (string) $haystack, (string) $needle, -$len );
+	}
+}
+if ( ! function_exists( 'str_contains' ) ) {
+	function str_contains( $haystack, $needle ): bool {
+		return '' === $needle || false !== strpos( (string) $haystack, (string) $needle );
+	}
+}
 
 /**
  * PSR-4 autoloader for the EasyFonts\ namespace.

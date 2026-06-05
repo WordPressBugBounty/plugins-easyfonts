@@ -15,6 +15,34 @@ defined( 'ABSPATH' ) || exit;
 class Downloader {
 
 	/**
+	 * Whether remote font-binary downloads are allowed in the current request.
+	 * Set to false during a normal visitor render (so the page is never blocked
+	 * by synchronous downloads); true during admin/CLI/warm (probe) requests.
+	 *
+	 * @var bool
+	 */
+	private static bool $allow_fonts = true;
+
+	/**
+	 * Allow/disallow remote font-binary downloads for this request.
+	 *
+	 * @param bool $allow Allowed?
+	 * @return void
+	 */
+	public static function set_allow_fonts( bool $allow ): void {
+		self::$allow_fonts = $allow;
+	}
+
+	/**
+	 * Are remote font-binary downloads currently allowed?
+	 *
+	 * @return bool
+	 */
+	public static function fonts_allowed(): bool {
+		return self::$allow_fonts;
+	}
+
+	/**
 	 * Modern desktop UA so the API returns woff2.
 	 */
 	const UA_WOFF2 = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0';
@@ -50,10 +78,20 @@ class Downloader {
 	public function fetch_css( string $url ): ?string {
 		$url = \EasyFonts\Detect\Providers::normalize_url( $url );
 
+		// Cache the fetched CSS so font detection doesn't hit the network on every
+		// page render. Keyed by URL + cache-buster, so any settings/font change
+		// (which bumps the buster) transparently refreshes it.
+		$cache_key = 'easyfonts_css_' . md5( $url . '|' . \EasyFonts\Settings::buster() );
+		$cached    = get_transient( $cache_key );
+
+		if ( is_string( $cached ) && '' !== $cached ) {
+			return $cached;
+		}
+
 		$response = wp_remote_get(
 			$url,
 			array(
-				'timeout'    => 20,
+				'timeout'    => 10,
 				'user-agent' => apply_filters( 'easyfonts_css_user_agent', self::UA_WOFF2 ),
 			)
 		);
@@ -64,7 +102,13 @@ class Downloader {
 
 		$body = wp_remote_retrieve_body( $response );
 
-		return '' === $body ? null : $body;
+		if ( '' === $body ) {
+			return null;
+		}
+
+		set_transient( $cache_key, $body, 7 * DAY_IN_SECONDS );
+
+		return $body;
 	}
 
 	/**
@@ -76,6 +120,14 @@ class Downloader {
 	 * @return array{file:string,ext:string,size:int}|null
 	 */
 	public function fetch_font( string $url, string $basename, Storage $storage ): ?array {
+		// Never download a font binary during a normal visitor page render — that
+		// is what could stall the request and white-screen the site. On the render
+		// path we serve only already-cached fonts; missing ones are fetched by a
+		// background warm (probe) request. Admin/CLI/warm requests set this true.
+		if ( ! self::$allow_fonts ) {
+			return null;
+		}
+
 		$url = \EasyFonts\Detect\Providers::normalize_url( $url );
 
 		// SSRF guard: only fetch font binaries from recognised provider hosts
@@ -89,7 +141,7 @@ class Downloader {
 		$response = wp_remote_get(
 			$url,
 			array(
-				'timeout'    => 30,
+				'timeout'    => 10,
 				'user-agent' => self::UA_WOFF2,
 			)
 		);

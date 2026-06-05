@@ -116,6 +116,24 @@ class Settings {
 	}
 
 	/**
+	 * Secret key authorising background cache-warming loopback requests.
+	 * Generated lazily and stored autoloaded. Lets an unauthenticated self-request
+	 * (?easyfonts_probe=KEY) be trusted to perform downloads, without wp-cron.
+	 *
+	 * @return string
+	 */
+	public static function warm_key(): string {
+		$key = (string) get_option( 'easyfonts_warm_key', '' );
+
+		if ( '' === $key ) {
+			$key = wp_generate_password( 40, false, false );
+			update_option( 'easyfonts_warm_key', $key, true );
+		}
+
+		return $key;
+	}
+
+	/**
 	 * Bump the cache-buster (after re-optimisation / purge).
 	 */
 	public static function bump_buster(): void {

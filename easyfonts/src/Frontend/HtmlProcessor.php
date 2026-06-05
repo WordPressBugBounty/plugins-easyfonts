@@ -21,6 +21,17 @@ defined( 'ABSPATH' ) || exit;
 class HtmlProcessor {
 
 	/**
+	 * Is WordPress's HTML API available? (WP 6.2+.) When it isn't, every method
+	 * here fails open — returning the HTML unchanged — so a missing core class can
+	 * never fatal inside the output buffer and white-screen the site.
+	 *
+	 * @return bool
+	 */
+	private function api_ready(): bool {
+		return class_exists( '\\WP_HTML_Tag_Processor' );
+	}
+
+	/**
 	 * Iterate every <link rel="stylesheet">, letting a callback rewrite the href.
 	 *
 	 * @param string   $html     HTML.
@@ -28,6 +39,10 @@ class HtmlProcessor {
 	 * @return array{html:string,changed:bool}
 	 */
 	public function rewrite_stylesheet_links( string $html, callable $callback ): array {
+		if ( ! $this->api_ready() ) {
+			return array( 'html' => $html, 'changed' => false );
+		}
+
 		$processor = new WP_HTML_Tag_Processor( $html );
 		$changed   = false;
 
@@ -70,6 +85,10 @@ class HtmlProcessor {
 	 * @return string[]
 	 */
 	public function stylesheet_hrefs( string $html ): array {
+		if ( ! $this->api_ready() ) {
+			return array();
+		}
+
 		$processor = new WP_HTML_Tag_Processor( $html );
 		$hrefs     = array();
 
@@ -105,6 +124,10 @@ class HtmlProcessor {
 			return $html;
 		}
 
+		if ( ! $this->api_ready() ) {
+			return $html;
+		}
+
 		$targets   = array_fill_keys( $hrefs, true );
 		$processor = new WP_HTML_Tag_Processor( $html );
 		$hit       = false;
@@ -128,12 +151,13 @@ class HtmlProcessor {
 			return $html;
 		}
 
-		$html = $processor->get_updated_html();
+		$updated = $processor->get_updated_html();
 
-		// Drop any <link …> carrying our marker.
-		$html = preg_replace( '#<link\b[^>]*\bdata-easyfonts-remove=([\'"])1\1[^>]*/?>\s*#i', '', $html );
+		// Drop any <link …> carrying our marker. If PCRE bails (e.g. backtrack
+		// limit), keep the tokenized HTML rather than blanking the document.
+		$cleaned = preg_replace( '#<link\b[^>]*\bdata-easyfonts-remove=([\'"])1\1[^>]*/?>\s*#i', '', $updated );
 
-		return null === $html ? '' : $html;
+		return null === $cleaned ? $updated : $cleaned;
 	}
 
 	/**
@@ -146,23 +170,67 @@ class HtmlProcessor {
 	public function rewrite_style_blocks( string $html, callable $callback ): array {
 		$changed = false;
 
-		$out = preg_replace_callback(
-			'/(<style\b[^>]*>)(.*?)(<\/style>)/is',
-			static function ( $m ) use ( $callback, &$changed ) {
-				$new = $callback( $m[2] );
+		// Linear <style>…</style> scanner — NOT a regex. A regex such as
+		// `(<style\b[^>]*>)(.*?)(</style>)/s` catastrophically backtracks (and on
+		// PCRE2+JIT can crash the process) over the megabyte-sized inline CSS that
+		// page builders emit, which silently blanked the page. This strpos walk is
+		// O(n) and cannot backtrack or overflow.
+		$max    = (int) apply_filters( 'easyfonts_max_style_block', 2 * 1024 * 1024 );
+		$out    = '';
+		$offset = 0;
+		$len    = strlen( $html );
 
-				if ( is_string( $new ) && $new !== $m[2] ) {
+		while ( $offset < $len ) {
+			$open = stripos( $html, '<style', $offset );
+
+			if ( false === $open ) {
+				$out .= substr( $html, $offset );
+				break;
+			}
+
+			// Make sure "<style" is a real tag start (next char ends the name).
+			$boundary = $html[ $open + 6 ] ?? '';
+
+			if ( '' !== $boundary && '>' !== $boundary && '/' !== $boundary && ! ctype_space( $boundary ) ) {
+				$out   .= substr( $html, $offset, ( $open + 6 ) - $offset );
+				$offset = $open + 6;
+				continue;
+			}
+
+			$gt = strpos( $html, '>', $open );
+
+			if ( false === $gt ) {
+				$out .= substr( $html, $offset );
+				break;
+			}
+
+			$close = stripos( $html, '</style>', $gt + 1 );
+
+			if ( false === $close ) {
+				$out .= substr( $html, $offset );
+				break;
+			}
+
+			// Copy everything up to this <style>, then the opener verbatim.
+			$out     .= substr( $html, $offset, $open - $offset );
+			$tag_open = substr( $html, $open, ( $gt - $open ) + 1 );
+			$content  = substr( $html, $gt + 1, $close - ( $gt + 1 ) );
+
+			if ( strlen( $content ) <= $max ) {
+				$new = $callback( $content );
+
+				if ( is_string( $new ) && $new !== $content ) {
 					$changed = true;
-					return $m[1] . $new . $m[3];
+					$content = $new;
 				}
+			}
 
-				return $m[0];
-			},
-			$html
-		);
+			$out   .= $tag_open . $content . '</style>';
+			$offset = $close + 8;
+		}
 
 		return array(
-			'html'    => null === $out ? $html : $out,
+			'html'    => $out,
 			'changed' => $changed,
 		);
 	}
@@ -175,6 +243,11 @@ class HtmlProcessor {
 	 * @return array{html:string,changed:bool}
 	 */
 	public function strip_font_hints( string $html, array $domains ): array {
+		if ( ! $this->api_ready() ) {
+			return array( 'html' => $html, 'changed' => false );
+		}
+
+		$input     = $html;
 		$processor = new WP_HTML_Tag_Processor( $html );
 		$remove    = array();
 
@@ -201,11 +274,16 @@ class HtmlProcessor {
 
 		$html = $processor->get_updated_html();
 
-		// Physically drop the neutralised tags.
-		$html = preg_replace( '/<link\b[^>]*\brel=([\'"])easyfonts-removed\1[^>]*>\s*/i', '', $html );
+		// Physically drop the neutralised tags. If PCRE bails, fall back to the
+		// input HTML rather than returning '' (which would blank the page).
+		$cleaned = preg_replace( '/<link\b[^>]*\brel=([\'"])easyfonts-removed\1[^>]*>\s*/i', '', $html );
+
+		if ( null === $cleaned ) {
+			return array( 'html' => $input, 'changed' => false );
+		}
 
 		return array(
-			'html'    => null === $html ? '' : $html,
+			'html'    => $cleaned,
 			'changed' => ! empty( $remove ),
 		);
 	}
