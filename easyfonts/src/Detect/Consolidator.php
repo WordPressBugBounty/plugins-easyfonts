@@ -125,6 +125,40 @@ class Consolidator {
 	private float $dl_started = 0.0;
 
 	/**
+	 * Lowercased families the beacon has CONFIRMED as loaded-but-never-rendered
+	 * on the current route — the only families page scoping drops. A font that
+	 * hasn't been measured yet (newly declared, just added/replaced) is NOT in
+	 * here, so it always loads until a beacon has judged it. See set_page_scope().
+	 *
+	 * @var array<string,bool>
+	 */
+	private array $scope_out = array();
+
+	/**
+	 * Whether the current route has been measured by a beacon. When false we
+	 * never scope (the scope-out set is empty anyway); kept so the page-scope
+	 * feature can be filtered off wholesale.
+	 *
+	 * @var bool
+	 */
+	private bool $route_measured = false;
+
+	/**
+	 * Provide the per-route scope-out set before run(). A declared font whose
+	 * family is listed here is left out of THIS page's stylesheet (the beacon
+	 * measured it loaded but it never rendered here). The font stays registered
+	 * and is still hosted for the routes that use it.
+	 *
+	 * @param array<string,bool> $scope_out Lowercased family => true.
+	 * @param bool               $measured  Route has beacon data.
+	 * @return void
+	 */
+	public function set_page_scope( array $scope_out, bool $measured ): void {
+		$this->scope_out      = $scope_out;
+		$this->route_measured = $measured;
+	}
+
+	/**
 	 * True when the most recent run found enabled fonts that aren't cached yet
 	 * and downloads were disabled (visitor render) — i.e. a background warm is
 	 * needed. Read by the output buffer to spawn a non-blocking loopback.
@@ -895,42 +929,87 @@ class Consolidator {
 	 * @return string|null Local stylesheet URL (cache-busted), or null.
 	 */
 	private function host( array $variants ): ?string {
-		$keys = array_keys( $variants );
-		sort( $keys );
-
-		$display    = (string) Settings::get( 'font_display', 'swap' );
-		$subsets    = implode( ',', (array) Settings::get( 'subsets', array() ) );
+		$display = (string) Settings::get( 'font_display', 'swap' );
+		$subsets = implode( ',', (array) Settings::get( 'subsets', array() ) );
 
 		$disabled = $this->registry->disabled_keys();
 
-		// Fold the disabled set into the cache key so enabling/disabling a
-		// variant yields a different stylesheet filename (no stale CSS served).
-		$disabled_sig = implode( ',', array_keys( array_intersect_key( array_flip( $keys ), $disabled ) ) );
-		$hash         = substr( hash( 'sha256', implode( '|', $keys ) . '|' . $display . '|' . $subsets . '|x:' . $disabled_sig ), 0, 20 );
+		// Page scoping: when the route has been measured, drop only the fonts a
+		// beacon CONFIRMED are loaded-but-unused here (e.g. a theme enqueues a
+		// global Google-fonts set, but a font only renders on one template).
+		// Matched at the family level and beacon-confirmed, so a newly declared
+		// font is never dropped before it's been judged, and the decision can't
+		// oscillate (it's based on the page's authorial font-family, which holds
+		// even after the font is scoped out).
+		//   - family is a confirmed scope-out  -> skip on this page
+		//   - family in the safelist            -> always include
+		//   - everything else (used, or new/unjudged) -> include
+		$scope = $this->route_measured
+			&& (bool) apply_filters( 'easyfonts_page_scope_fonts', true );
 
-		// Consolidated stylesheet lives in a readable `css/` folder (no doubled
-		// hash folder, which security scanners flag). Font binaries live under
-		// `fonts/{family}/…` so identical variants are shared across stylesheets.
+		$force = array();
+
+		foreach ( (array) apply_filters( 'easyfonts_force_families', array() ) as $f ) {
+			$force[ strtolower( (string) $f ) ] = true;
+		}
+
+		// Decide, per detected variant, whether it is EMITTED on this page.
+		// Skipped variants are still registered below so they stay visible and
+		// re-enableable, and are still hosted by the routes that use them.
+		$emit = array();
+
+		foreach ( $variants as $key => $v ) {
+			if ( isset( $disabled[ $key ] ) ) {
+				continue;
+			}
+
+			if ( $scope ) {
+				$fam = strtolower( (string) $v['family'] );
+
+				if ( isset( $this->scope_out[ $fam ] ) && ! isset( $force[ $fam ] ) ) {
+					continue;
+				}
+			}
+
+			$emit[ $key ] = true;
+		}
+
+		// Cache key = the EMITTED set (+ display + subsets). Two pages that emit
+		// the same faces share one file; a page whose enabled set differs gets
+		// its own. If the keyed file already exists we never rewrite it —
+		// identical sets are deduped on disk, so we don't burn IO/CPU
+		// regenerating the same stylesheet.
+		$emit_keys = array_keys( $emit );
+		sort( $emit_keys );
+		$hash = substr( hash( 'sha256', implode( '|', $emit_keys ) . '|' . $display . '|' . $subsets ), 0, 20 );
+
+		// Consolidated stylesheet lives in a readable `css/` folder. Font
+		// binaries live under `fonts/{family}/…` so identical variants are
+		// shared across stylesheets.
 		$file        = 'css/' . $hash . '.css';
 		$file_exists = $this->storage->exists( $file );
+
+		// M-3: one batched read of the rows we already have for every detected
+		// variant, so registration costs a single SELECT instead of one per
+		// variant. We then only write rows that are new or whose font file
+		// changed — on a warm-cache render that means zero writes.
+		$known = $this->registry->existing_map( array_keys( $variants ) );
 
 		$css    = "/**\n * Auto Generated by EasyFonts\n * @url: https://fluxpress.io\n */\n";
 		$hosted = 0;
 
 		foreach ( $variants as $key => $v ) {
-			// User-disabled variant: keep it registered (so it shows in the
-			// "unused/disabled" list to re-enable) but don't download, don't add
-			// to the stylesheet, and don't preload.
-			$is_disabled = isset( $disabled[ $key ] );
+			$is_emitted = isset( $emit[ $key ] );
 
 			$basename  = $this->basename_for( $v );
 			$font_file = $this->locate_font( $basename );
 			$size      = $font_file ? $this->storage->size( $font_file ) : 0;
 
-			if ( ! $is_disabled && null === $font_file ) {
-				// Don't download on a visitor render (downloads disabled), and
-				// don't exceed the warm budget. Either way, mark the page as not
-				// yet fully hostable so run() leaves it untouched and warms later.
+			// Only EMITTED variants are required to be hosted on this page. A
+			// disabled or unloaded variant is never downloaded and never blocks
+			// the page (it isn't needed here); it may still be downloaded later
+			// by a route that actually renders it (font binaries are shared).
+			if ( $is_emitted && null === $font_file ) {
 				if ( ! Downloader::fonts_allowed() || ! $this->within_budget() ) {
 					$this->missing = true;
 					continue;
@@ -950,22 +1029,29 @@ class Consolidator {
 				$size      = $download['size'];
 			}
 
-			$this->registry->upsert(
-				array(
-					'family'      => $v['family'],
-					'weight'      => $v['weight'],
-					'style'       => $v['style'],
-					'subset'      => $v['subset'],
-					'is_variable' => $v['is_variable'],
-					'provider'    => $v['provider'],
-					'css_file'    => $file,
-					'font_file'   => (string) $font_file,
-					'file_size'   => $size,
-					'source_url'  => $v['source'],
-				)
-			);
+			// Register the variant, but skip the write when we already have it
+			// with the same font file (the common warm-cache case) — keeps the
+			// hosted-fonts list in sync without N queries on the hot path.
+			$current = $known[ $key ] ?? null;
 
-			if ( $is_disabled || null === $font_file ) {
+			if ( null === $current || (string) $current !== (string) $font_file ) {
+				$this->registry->upsert(
+					array(
+						'family'      => $v['family'],
+						'weight'      => $v['weight'],
+						'style'       => $v['style'],
+						'subset'      => $v['subset'],
+						'is_variable' => $v['is_variable'],
+						'provider'    => $v['provider'],
+						'css_file'    => $file,
+						'font_file'   => (string) $font_file,
+						'file_size'   => $size,
+						'source_url'  => $v['source'],
+					)
+				);
+			}
+
+			if ( ! $is_emitted || null === $font_file ) {
 				continue;
 			}
 
@@ -985,8 +1071,8 @@ class Consolidator {
 			return null;
 		}
 
-		// Rewrite the stylesheet whenever the enabled set might have changed
-		// (cheap; keyed file means content is deterministic for a given set).
+		// Deterministic content for a given emit set: only write when the keyed
+		// file doesn't already exist.
 		if ( ! $file_exists ) {
 			if ( ! $this->storage->write( $file, $css ) ) {
 				return null;
@@ -1028,25 +1114,57 @@ class Consolidator {
 		$ext    = strtolower( (string) pathinfo( (string) wp_parse_url( $local_url, PHP_URL_PATH ), PATHINFO_EXTENSION ) );
 		$format = 'woff' === $ext ? 'woff' : ( 'ttf' === $ext ? 'truetype' : ( 'otf' === $ext ? 'opentype' : 'woff2' ) );
 
+		// Harden every interpolated value against CSS-context breakout. Family /
+		// weight / style / unicode-range originate from parsed @font-face bodies
+		// and font URLs, which an author could craft; stripping CSS structural
+		// characters stops a malicious value from escaping its declaration (and,
+		// when the sheet is inlined, from breaking out of <style>). Legitimate
+		// values — "Open Sans", "100 900", "oblique 10deg", "U+0000-00FF" — are
+		// unaffected, so nothing is lost.
+		$family  = self::css_token( (string) $v['family'] );
+		$style   = self::css_token( (string) $v['style'] );
+		$weight  = self::css_token( (string) $v['weight'] );
+		$urange  = self::css_token( (string) $v['unicode_range'] );
+
 		$lines   = array();
 		$lines[] = '@font-face {';
-		$lines[] = "  font-family: '" . str_replace( "'", '', $v['family'] ) . "';";
-		$lines[] = '  font-style: ' . $v['style'] . ';';
-		$lines[] = '  font-weight: ' . $v['weight'] . ';';
+		$lines[] = "  font-family: '" . $family . "';";
+		$lines[] = '  font-style: ' . ( '' !== $style ? $style : 'normal' ) . ';';
+		$lines[] = '  font-weight: ' . ( '' !== $weight ? $weight : '400' ) . ';';
 
 		if ( '' !== $display && 'auto' !== $display ) {
-			$lines[] = '  font-display: ' . $display . ';';
+			$lines[] = '  font-display: ' . self::css_token( $display ) . ';';
 		}
 
 		$lines[] = "  src: url('" . esc_url_raw( $local_url ) . "') format('" . $format . "');";
 
-		if ( '' !== $v['unicode_range'] ) {
-			$lines[] = '  unicode-range: ' . $v['unicode_range'] . ';';
+		if ( '' !== $urange ) {
+			$lines[] = '  unicode-range: ' . $urange . ';';
 		}
 
 		$lines[] = "}\n";
 
 		return implode( "\n", $lines );
+	}
+
+	/**
+	 * Strip characters that could break out of a CSS string or declaration (or,
+	 * for an inlined sheet, out of the <style> element). Removes quotes, braces,
+	 * semicolons, angle brackets, backslashes, comment delimiters and newlines.
+	 * Real font-family / weight / style / unicode-range values never contain
+	 * these, so this is purely defensive and lossless for legitimate input.
+	 *
+	 * @param string $value Raw value.
+	 * @return string
+	 */
+	private static function css_token( string $value ): string {
+		return trim(
+			str_replace(
+				array( "'", '"', ';', '{', '}', '<', '>', '\\', '/*', '*/', "\r", "\n", "\t" ),
+				'',
+				$value
+			)
+		);
 	}
 
 	/**

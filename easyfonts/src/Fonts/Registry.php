@@ -143,9 +143,55 @@ class Registry {
 	}
 
 	/**
-	 * Distinct family/weight/style targets the user marked for preloading
-	 * (and which are still enabled), each resolved to a font file. Deduped:
-	 * one entry per family+weight+style, preferring the latin subset file.
+	 * Batch-fetch the currently-stored font file for a set of variant keys, so
+	 * the consolidator can register a page's variants with a single SELECT
+	 * instead of one per variant. Returns a map of variant_key => font_file
+	 * (only for keys that exist).
+	 *
+	 * @param string[] $keys Variant keys.
+	 * @return array<string,string>
+	 */
+	public function existing_map( array $keys ): array {
+		global $wpdb;
+
+		$keys = array_values( array_unique( array_filter( $keys, 'strlen' ) ) );
+
+		if ( empty( $keys ) ) {
+			return array();
+		}
+
+		$placeholders = implode( ',', array_fill( 0, count( $keys ), '%s' ) );
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT variant_key, font_file FROM {$this->table()} WHERE variant_key IN ( {$placeholders} )", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				...$keys
+			),
+			ARRAY_A
+		);
+
+		$out = array();
+
+		if ( $rows ) {
+			foreach ( $rows as $r ) {
+				$out[ $r['variant_key'] ] = (string) $r['font_file'];
+			}
+		}
+
+		return $out;
+	}
+
+	/**
+	 * User-FORCED preload targets: variants the user explicitly toggled to
+	 * "always preload" (is_preloaded = 1 AND preload_user_set = 1) and that are
+	 * still enabled, each resolved to a font file. These are intentional global
+	 * overrides — they apply on every page that actually uses the family (the
+	 * caller intersects with the fonts present on the current page). Automatic,
+	 * above-the-fold preloads are NOT sourced here; they come from the per-route
+	 * beacon decision (see UsageTracker::get_decision / SmartPreload).
+	 *
+	 * Deduped: one entry per family+weight+style, preferring the latin subset.
 	 *
 	 * @return array<int,array{family:string,weight:string,style:string,file:string}>
 	 */
@@ -156,7 +202,7 @@ class Registry {
 		$rows = $wpdb->get_results(
 			"SELECT family, weight, style, font_file, subset
 			 FROM {$this->table()}
-			 WHERE is_preloaded = 1 AND is_enabled = 1 AND font_file <> ''
+			 WHERE is_preloaded = 1 AND preload_user_set = 1 AND is_enabled = 1 AND font_file <> ''
 			 ORDER BY ( subset = 'latin' ) DESC",
 			ARRAY_A
 		);
@@ -194,71 +240,6 @@ class Registry {
 	 * @param bool   $value New value.
 	 * @return void
 	 */
-	/**
-	 * Auto-enable preload for a variant, but only if the user hasn't set their
-	 * own preload choice for it (preload_user_set = 0). Does NOT mark user_set,
-	 * so a later user toggle still wins. Returns true if a row was actually
-	 * flipped on (so the caller can count it against the per-page cap).
-	 *
-	 * @param string $family Family.
-	 * @param string $weight Weight.
-	 * @param string $style  Style.
-	 * @return bool
-	 */
-	public function auto_preload( string $family, string $weight, string $style ): bool {
-		global $wpdb;
-		$table = $this->table();
-
-		// 1. Exact match (family + weight + style), only if not user-set.
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
-		$updated = (int) $wpdb->query(
-			$wpdb->prepare(
-				"UPDATE {$table} SET is_preloaded = 1
-				 WHERE family = %s AND weight = %s AND style = %s
-				 AND preload_user_set = 0 AND is_preloaded = 0 AND is_enabled = 1",
-				$family,
-				$weight,
-				$style
-			)
-		);
-
-		if ( $updated > 0 ) {
-			return true;
-		}
-
-		// 2. The browser's computed weight/style often differs from the hosted
-		//    file (e.g. a heading renders at 700 but only 400 is hosted, or a
-		//    variable font resolves oddly). So if no exact row matched, preload
-		//    the family's single best enabled, not-yet-preloaded, not-user-set
-		//    variant — preferring the requested style, then a 400/normal-ish
-		//    weight. This ensures an above-the-fold family still gets preloaded.
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
-		$id = $wpdb->get_var(
-			$wpdb->prepare(
-				"SELECT id FROM {$table}
-				 WHERE family = %s
-				 AND preload_user_set = 0 AND is_preloaded = 0 AND is_enabled = 1
-				 ORDER BY ( style = %s ) DESC,
-				          ABS( CAST( NULLIF(weight,'') AS UNSIGNED ) - 400 ) ASC,
-				          id ASC
-				 LIMIT 1",
-				$family,
-				$style
-			)
-		);
-
-		if ( ! $id ) {
-			return false;
-		}
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
-		$wpdb->query(
-			$wpdb->prepare( "UPDATE {$table} SET is_preloaded = 1 WHERE id = %d", (int) $id )
-		);
-
-		return true;
-	}
-
 	public function set_flag_all( string $field, bool $value ): void {
 		global $wpdb;
 
@@ -513,6 +494,50 @@ class Registry {
 				$family,
 				$weight,
 				$style
+			)
+		);
+
+		return $file ? (string) $file : null;
+	}
+
+	/**
+	 * Best hosted file to PRELOAD for a family, tolerant of weight/style drift.
+	 * The beacon reports the above-the-fold face using the element's COMPUTED
+	 * weight/style, which often differs from the hosted variant (e.g. a
+	 * single-weight family rendered bold reports weight 700, but only 400 is
+	 * hosted). An exact lookup would then return nothing and the font would
+	 * never preload. So we prefer an exact match, then the same style, then the
+	 * latin subset, then the closest available weight — always returning a real
+	 * file when the (enabled) family is hosted at all.
+	 *
+	 * @param string $family Family.
+	 * @param string $weight Desired weight.
+	 * @param string $style  Desired style.
+	 * @return string|null
+	 */
+	public function resolve_preload_file( string $family, string $weight, string $style ): ?string {
+		global $wpdb;
+
+		$target = (int) preg_replace( '/\D+/', '', $weight );
+		$target = $target > 0 ? $target : 400;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+		$file = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT font_file FROM {$this->table()}
+				 WHERE family = %s AND is_enabled = 1 AND font_file <> ''
+				 ORDER BY
+					( weight = %s AND style = %s ) DESC,
+					( style = %s ) DESC,
+					( subset = 'latin' ) DESC,
+					ABS( CAST( NULLIF(weight,'') AS UNSIGNED ) - %d ) ASC,
+					id ASC
+				 LIMIT 1",
+				$family,
+				$weight,
+				$style,
+				$style,
+				$target
 			)
 		);
 

@@ -53,7 +53,7 @@ class Beacon {
 			'nonce'    => wp_create_nonce( 'wp_rest' ),
 		);
 
-		$src = EASYFONTS_DIR . 'assets/frontend/async-blocker.js';
+		$src = EASYFONTS_DIR . 'assets/frontend/async-blocker.min.js';
 
 		if ( ! is_readable( $src ) ) {
 			return;
@@ -81,13 +81,19 @@ class Beacon {
 			return;
 		}
 
+		// Master kill switch: when Easy Fonts is disabled, add nothing to the
+		// front end — no beacon, no X-ray, no inline config.
+		if ( ! Settings::get( 'enabled', 1 ) ) {
+			return;
+		}
+
 		$route  = (string) wp_parse_url( home_url( add_query_arg( array() ) ), PHP_URL_PATH );
 		$device = wp_is_mobile() ? 'mobile' : 'desktop';
 
 		if ( Settings::get( 'beacon', 1 ) ) {
 			wp_enqueue_script(
 				'easyfonts-beacon',
-				EASYFONTS_URL . 'assets/frontend/beacon.js',
+				EASYFONTS_URL . 'assets/frontend/beacon.min.js',
 				array(),
 				EASYFONTS_VERSION,
 				array(
@@ -112,7 +118,7 @@ class Beacon {
 		if ( current_user_can( 'manage_options' ) && isset( $_GET['easyfonts_xray'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification
 			wp_enqueue_script(
 				'easyfonts-xray',
-				EASYFONTS_URL . 'assets/frontend/xray.js',
+				EASYFONTS_URL . 'assets/frontend/xray.min.js',
 				array(),
 				EASYFONTS_VERSION,
 				array( 'in_footer' => true )

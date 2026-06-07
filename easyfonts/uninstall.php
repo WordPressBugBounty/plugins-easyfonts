@@ -54,6 +54,7 @@ function easyfonts_purge_site(): void {
 			'easyfonts_processed_local',
 			'easyfonts_processed_external',
 			'easyfonts_last_beacon',
+			'easyfonts_global_preload',
 			'easyfonts_async_urls',
 		) as $option
 	) {

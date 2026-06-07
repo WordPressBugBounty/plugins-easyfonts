@@ -2,28 +2,39 @@
 /**
  * Smart preload.
  *
- * Emits <link rel="preload"> for the font variants the user has marked to
- * preload (Fonts screen → per-variant Preload toggle). Results are deduped by
- * file and capped, and the output buffer positions them ABOVE the consolidated
- * stylesheet so the browser starts fetching them as early as possible.
+ * Emits <link rel="preload"> for the font faces that render ABOVE THE FOLD on
+ * the current page, so the browser fetches them as early as possible. Preload
+ * is a scarce resource — preloading a font that isn't critical (or isn't even
+ * on the page) competes with the hero content — so the set is built narrowly:
  *
- * When "smart preload" is enabled, the beacon auto-marks above-the-fold variants
- * as preloaded after a real visit (see RestApi::beacon), so this populates with
- * sensible defaults that the user can then refine.
+ *   1. PER-ROUTE above-the-fold families — measured by the beacon for THIS
+ *      route. A font above the fold only on one page is preloaded only there.
+ *   2. GLOBAL above-the-fold families — families that are above the fold on
+ *      every route where they render (e.g. the body/heading font). Their answer
+ *      is the same everywhere, so they're preloaded wherever present without any
+ *      per-route lookup (the cheap path the site-wide fonts take).
+ *   3. USER-FORCED families — variants the user toggled to "always preload".
+ *
+ * Every candidate is intersected with the faces actually emitted on this page
+ * (Consolidator::touched), and resolved to the file that is genuinely hosted —
+ * so a font is never preloaded on a page that doesn't use it, and a face the
+ * beacon reported at a weight we don't host still resolves to the right file.
  *
  * @package EasyFonts
  */
 
 namespace EasyFonts\Frontend;
 
+use EasyFonts\Detect\Consolidator;
 use EasyFonts\Fonts\Registry;
 use EasyFonts\Fonts\Storage;
+use EasyFonts\Fonts\UsageTracker;
 use EasyFonts\Settings;
 
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Builds deduped preload link markup.
+ * Builds deduped, page-scoped preload link markup.
  */
 class SmartPreload {
 
@@ -48,46 +59,99 @@ class SmartPreload {
 	/**
 	 * Build preload markup for the current request.
 	 *
+	 * @param string             $route             Canonical route (path) of the current page.
+	 * @param string             $device            'mobile'|'desktop'|'any' (reserved; matching is family-level).
+	 * @param array<string,bool> $present_families  Lowercased families emitted on this page (from Consolidator::touched).
+	 * @param array<string,bool> $above_fold        Lowercased families measured above the fold on THIS route.
 	 * @return string
 	 */
-	public function build(): string {
+	public function build( string $route = '', string $device = 'any', array $present_families = array(), array $above_fold = array() ): string {
 		if ( ! Settings::get( 'smart_preload', 1 ) ) {
 			return '';
 		}
 
-		$targets = $this->registry->preload_targets();
+		// Families that should preload here: this route's above-the-fold set,
+		// plus the uniformly-above-the-fold (global) set. The global set is the
+		// "skip per-route checking" path — its members preload wherever present.
+		$want = $above_fold;
 
-		if ( empty( $targets ) ) {
-			return '';
+		foreach ( ( new UsageTracker() )->global_preload_families() as $fam => $_ ) {
+			$want[ $fam ] = true;
 		}
+
+		$cap = max( 1, (int) apply_filters( 'easyfonts_preload_cap', 6 ) );
 
 		$links = '';
 		$seen  = array();
 		$count = 0;
 
-		foreach ( $targets as $t ) {
-			if ( $count >= 6 ) {
-				break; // Hard cap — preloading too much hurts more than it helps.
+		// 1. Above-the-fold (per-route + global): preload the faces this page
+		//    actually emits for those families — using the hosted variant, so a
+		//    faux-bold/weight-mismatch report still resolves to a real file.
+		foreach ( Consolidator::touched() as $t ) {
+			if ( $count >= $cap ) {
+				break;
 			}
 
-			$file = $t['file'];
+			$fam = strtolower( (string) $t['family'] );
 
-			if ( '' === $file || isset( $seen[ $file ] ) || ! $this->storage->exists( $file ) ) {
+			if ( empty( $want[ $fam ] ) ) {
 				continue;
 			}
 
-			$seen[ $file ] = true;
+			$file = $this->registry->resolve_preload_file( (string) $t['family'], (string) $t['weight'], (string) $t['style'] );
 
-			$url    = add_query_arg( 'ver', Settings::buster(), $this->storage->url( $file ) );
-			$links .= sprintf(
-				'<link rel="preload" href="%s" as="font" type="%s" crossorigin>' . "\n",
-				esc_url( $url ),
-				esc_attr( $this->mime_for( $file ) )
-			);
-			$count++;
+			if ( $this->emit_link( $file, $seen, $links ) ) {
+				$count++;
+			}
+		}
+
+		// 2. User-forced "always preload" variants, intersected with the page.
+		$gate = ! empty( $present_families );
+
+		foreach ( $this->registry->preload_targets() as $u ) {
+			if ( $count >= $cap ) {
+				break;
+			}
+
+			if ( $gate && empty( $present_families[ strtolower( (string) $u['family'] ) ] ) ) {
+				continue; // forced font isn't on this page — don't preload here.
+			}
+
+			if ( $this->emit_link( $u['file'], $seen, $links ) ) {
+				$count++;
+			}
 		}
 
 		return $links;
+	}
+
+	/**
+	 * Append a preload <link> for a hosted file, deduping by file and skipping
+	 * anything missing on disk. Returns true when a link was added.
+	 *
+	 * @param string|null         $file  Font filename.
+	 * @param array<string,bool>  $seen  Dedupe set (by reference).
+	 * @param string              $links Accumulated markup (by reference).
+	 * @return bool
+	 */
+	private function emit_link( ?string $file, array &$seen, string &$links ): bool {
+		$file = (string) $file;
+
+		if ( '' === $file || isset( $seen[ $file ] ) || ! $this->storage->exists( $file ) ) {
+			return false;
+		}
+
+		$seen[ $file ] = true;
+
+		$url    = add_query_arg( 'ver', Settings::buster(), $this->storage->url( $file ) );
+		$links .= sprintf(
+			'<link rel="preload" href="%s" as="font" type="%s" crossorigin>' . "\n",
+			esc_url( $url ),
+			esc_attr( $this->mime_for( $file ) )
+		);
+
+		return true;
 	}
 
 	/**

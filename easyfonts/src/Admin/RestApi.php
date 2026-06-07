@@ -312,6 +312,15 @@ class RestApi {
 			array( home_url( '/' ) )
 		);
 
+		// Clear any throttled decision for the target routes so the X-ray beacon
+		// that runs right after this is accepted immediately (a fresh, on-demand
+		// measurement rather than waiting out the throttle window).
+		$tracker = new UsageTracker();
+
+		foreach ( (array) $targets as $t ) {
+			$tracker->forget_decision( UsageTracker::route_for( (string) $t ) );
+		}
+
 		$ok = 0;
 
 		foreach ( (array) $targets as $target ) {
@@ -481,13 +490,16 @@ class RestApi {
 
 		$usage = new UsageTracker();
 
-		// Write-once per route + device: once a fresh decision exists for this
-		// route/device we ignore further public beacons for it until the
-		// retention window elapses. This bounds DB writes and neutralises
-		// repeated-request abuse (an anonymous endpoint must not be writable on
-		// every hit, nor able to keep flipping persistent flags) — without
-		// losing any functionality, since the first beacon already captured it.
-		if ( $usage->has_fresh_decision( $route, (string) $device ) ) {
+		// Per-route/device throttle: once we record a beacon for a route we
+		// ignore further beacons for it for a short window. This bounds writes
+		// on an anonymous endpoint and neutralises repeated-request abuse, while
+		// still letting used/unused classification and page scoping self-correct
+		// quickly (hourly by default) as pages change — the old week-long
+		// write-once meant a font that started or stopped being used wasn't
+		// reflected for days.
+		$throttle = (int) apply_filters( 'easyfonts_beacon_throttle_hours', 1 );
+
+		if ( $throttle > 0 && $usage->has_fresh_decision( $route, (string) $device, $throttle ) ) {
 			return new WP_REST_Response( array( 'ok' => true, 'cached' => true ), 200 );
 		}
 
@@ -520,43 +532,40 @@ class RestApi {
 			);
 		}
 
+		// Also record what loaded but never rendered, as beacon-origin rows with
+		// rendered = 0. This is what lets page scoping tell a CONFIRMED-unused
+		// font (drop it from this page) apart from a font that simply hasn't been
+		// measured yet (keep it) — so a newly added/replaced font is never
+		// wrongly scoped out before the beacon has judged it.
+		foreach ( $unload as $u ) {
+			if ( empty( $u['family'] ) ) {
+				continue;
+			}
+
+			$records[] = array(
+				'family'     => $u['family'],
+				'weight'     => $u['weight'] ?? '400',
+				'style'      => $u['style'] ?? 'normal',
+				'origin'     => 'beacon',
+				'rendered'   => 0,
+				'above_fold' => 0,
+			);
+		}
+
 		if ( ! empty( $records ) ) {
 			$usage->record( $route, url_to_postid( home_url( $route ) ), $records );
+
+			// Refresh the uniformly-above-the-fold family cache from the updated
+			// usage data. Runs only when a beacon is accepted (throttled), so the
+			// cost is a single grouped scan of the capped usage table.
+			$usage->recompute_global_preload();
 		}
 
-		// Store the decision for future preloads/unloads.
+		// Persist the raw beacon measurement for this route/device. Page scoping
+		// and preload are driven from the recorded usage above (family-level,
+		// self-correcting); this row anchors the per-route throttle (updated_at)
+		// and keeps the raw above-the-fold/unrendered snapshot for diagnostics.
 		$usage->store_decision( $route, (string) $device, $this->clean_variants( $preload ), $this->clean_variants( $unload ) );
-
-		// Auto-preload above-the-fold fonts the beacon just measured — capped,
-		// and only where the user hasn't already made a preload choice. Preload
-		// is a scarce resource: preloading every above-fold face hurts more than
-		// it helps, so we cap to the first few. Newly-detected fonts already
-		// default to Load=on at insert time, so used fonts light up automatically;
-		// this adds the Preload half for the genuine hero fonts only.
-		if ( Settings::get( 'smart_preload', 1 ) && ! empty( $preload ) ) {
-			$registry = new Registry();
-
-			/**
-			 * Max number of fonts to auto-preload from a single page's
-			 * above-the-fold set. Keep small — preload is for hero fonts only.
-			 *
-			 * @param int $cap
-			 */
-			$preload_cap = (int) apply_filters( 'easyfonts_auto_preload_cap', 2 );
-			$done        = 0;
-
-			foreach ( $this->clean_variants( $preload ) as $variant ) {
-				if ( $done >= $preload_cap ) {
-					break;
-				}
-
-				// Respect a user's explicit preload choice: only auto-set when
-				// preload_user_set = 0 for this variant.
-				if ( $registry->auto_preload( $variant['family'], $variant['weight'], $variant['style'] ) ) {
-					$done++;
-				}
-			}
-		}
 
 		return new WP_REST_Response( array( 'ok' => true ), 200 );
 	}

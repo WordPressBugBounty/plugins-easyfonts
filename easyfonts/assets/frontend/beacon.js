@@ -45,26 +45,44 @@
 			loaded[ fam ][ w + '|' + s ] = true;
 		} );
 
-		// 2. Rendered + above-the-fold (sample visible text elements).
+		// 2. Rendered + above-the-fold (sample visible text elements). The set
+		//    of element types is deliberately broad — a family is only kept on a
+		//    page if something here reports it, so missing an element type would
+		//    wrongly scope a used font off the page.
 		var nodes = document.querySelectorAll(
-			'h1,h2,h3,h4,h5,h6,p,a,span,li,td,th,button,label,blockquote,figcaption,strong,em,div'
+			'h1,h2,h3,h4,h5,h6,p,a,span,li,td,th,caption,button,label,input,textarea,select,option,' +
+			'blockquote,figcaption,figure,dl,dt,dd,summary,details,strong,b,em,i,u,mark,small,' +
+			'cite,q,code,pre,abbr,time,address,legend,output,div'
 		);
-		var max = Math.min( nodes.length, 2500 ); // cap work on huge pages
+		var max = Math.min( nodes.length, 3000 ); // cap work on huge pages
+
+		function noteRendered( fam, weight, style, rect ) {
+			if ( ! fam || GENERIC.test( fam ) ) { return; }
+			var key = fam + '|' + normWeight( weight ) + '|' + ( style || 'normal' );
+			rendered[ key ] = true;
+			if ( rect && rect.top < foldLine && rect.bottom > 0 && rect.width > 0 && rect.height > 0 ) {
+				aboveFold[ key ] = true;
+			}
+		}
 
 		for ( var i = 0; i < max; i++ ) {
 			var el = nodes[ i ];
-			if ( ! el.textContent || ! el.textContent.trim() ) { continue; }
 
-			var cs = getComputedStyle( el );
-			var first = clean( ( cs.fontFamily || '' ).split( ',' )[ 0 ] );
-			if ( ! first || GENERIC.test( first ) ) { continue; }
-
-			var key = first + '|' + normWeight( cs.fontWeight ) + '|' + ( cs.fontStyle || 'normal' );
-			rendered[ key ] = true;
+			var hasText = el.value ? true : ( el.textContent && el.textContent.trim() );
+			if ( ! hasText ) { continue; }
 
 			var rect = el.getBoundingClientRect();
-			if ( rect.top < foldLine && rect.bottom > 0 && rect.width > 0 && rect.height > 0 ) {
-				aboveFold[ key ] = true;
+			var cs   = getComputedStyle( el );
+			noteRendered( clean( ( cs.fontFamily || '' ).split( ',' )[ 0 ] ), cs.fontWeight, cs.fontStyle, rect );
+
+			// Generated content (::before / ::after) can carry its own font.
+			var bef = getComputedStyle( el, '::before' );
+			if ( bef && bef.content && bef.content !== 'none' && bef.content !== 'normal' ) {
+				noteRendered( clean( ( bef.fontFamily || '' ).split( ',' )[ 0 ] ), bef.fontWeight, bef.fontStyle, rect );
+			}
+			var aft = getComputedStyle( el, '::after' );
+			if ( aft && aft.content && aft.content !== 'none' && aft.content !== 'normal' ) {
+				noteRendered( clean( ( aft.fontFamily || '' ).split( ',' )[ 0 ] ), aft.fontWeight, aft.fontStyle, rect );
 			}
 		}
 

@@ -51,13 +51,40 @@ class Providers {
 	 * @return bool
 	 */
 	public static function is_css_url( string $url ): bool {
-		foreach ( self::css_hosts() as $host ) {
-			if ( false !== strpos( $url, $host . '/css' ) || false !== strpos( $url, $host . '/icon' ) ) {
+		$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+		$path = (string) wp_parse_url( $url, PHP_URL_PATH );
+
+		if ( '' === $host ) {
+			return false;
+		}
+
+		foreach ( self::css_hosts() as $candidate ) {
+			if ( self::host_matches( $host, $candidate )
+				&& ( 0 === strpos( $path, '/css' ) || 0 === strpos( $path, '/icon' ) ) ) {
 				return true;
 			}
 		}
 
 		return false;
+	}
+
+	/**
+	 * Does $host equal an allowed host or a subdomain of it? Parsed-host match
+	 * (not substring), so a crafted URL like https://evil.test/fonts.googleapis.com/css
+	 * — whose real host is evil.test — is correctly rejected.
+	 *
+	 * @param string $host      Lowercased host from the URL under test.
+	 * @param string $candidate Allowed host.
+	 * @return bool
+	 */
+	private static function host_matches( string $host, string $candidate ): bool {
+		$candidate = strtolower( trim( $candidate ) );
+
+		if ( '' === $candidate ) {
+			return false;
+		}
+
+		return $host === $candidate || substr( $host, -strlen( '.' . $candidate ) ) === '.' . $candidate;
 	}
 
 	/**
@@ -129,8 +156,14 @@ class Providers {
 	 * @return bool
 	 */
 	public static function is_provider_url( string $url ): bool {
-		foreach ( self::hint_hosts() as $host ) {
-			if ( false !== strpos( $url, $host ) ) {
+		$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+
+		if ( '' === $host ) {
+			return false;
+		}
+
+		foreach ( self::hint_hosts() as $candidate ) {
+			if ( self::host_matches( $host, $candidate ) ) {
 				return true;
 			}
 		}

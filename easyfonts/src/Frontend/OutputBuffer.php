@@ -114,10 +114,36 @@ class OutputBuffer {
 		$original = $buffer;
 
 		try {
+			// Resolve the page identity once (canonical route + device).
+			$route  = UsageTracker::current_route();
+			$device = wp_is_mobile() ? 'mobile' : 'desktop';
+
+			// Page scope: the families a beacon has seen actually used on this
+			// route. A normal render is scoped to those (so a globally-declared
+			// font that isn't used here is left off the page); a warm/probe is
+			// NOT scoped, so it downloads every declared font and keeps the
+			// shared cache complete for the routes that do use them. With no
+			// beacon data yet, scoping is off and every declared font loads —
+			// so the first visit still self-hosts everything, and later visits
+			// trim down once the page has been measured.
+			// Page scope + preload, from one per-route query. We scope out only
+			// fonts a beacon CONFIRMED are loaded-but-unused here — never a font
+			// that simply hasn't been measured yet (so a just-added/replaced
+			// Customizer font loads immediately, then gets judged by the beacon).
+			// A warm/probe is never scoped, so it downloads every declared font
+			// and keeps the shared cache complete.
+			$tracker    = new UsageTracker();
+			$profile    = $this->force
+				? array( 'scope_out' => array(), 'above_fold' => array(), 'measured' => false )
+				: $tracker->route_render_profile( $route );
+			$scope_out  = $profile['scope_out'];
+			$above_fold = $profile['above_fold'];
+			$measured   = ! empty( $profile['measured'] );
+
 			// 1. Detect + localise. The consolidator is transactional: it only
 			//    rewrites the page when every font it needs is already hosted
 			//    locally; otherwise it returns the page untouched and flags a warm.
-			$buffer = $this->pipeline->process( $buffer, $this->force );
+			$buffer = $this->pipeline->process( $buffer, $this->force, $scope_out, $measured );
 
 			// Did we actually commit a localization this run (consolidated sheet
 			// and/or an in-place local stylesheet rewrite)?
@@ -133,14 +159,14 @@ class OutputBuffer {
 				}
 
 				// 3. Inject preloads → consolidated stylesheet → metric fallbacks.
-				$head = $this->build_head();
+				$head = $this->build_head( $route, $device, $above_fold );
 
 				if ( '' !== $head ) {
 					$buffer = $this->html->before_head_close( $buffer, $head );
 				}
 
 				// 4. Log what we hosted this request (origin=buffer).
-				$this->log_usage();
+				$this->log_usage( $route );
 			}
 
 			// Fail-safe: never hand back an empty document.
@@ -175,9 +201,9 @@ class OutputBuffer {
 	 */
 	private function schedule_warm(): void {
 		$url  = home_url( add_query_arg( array() ) );
-		$lock = 'easyfonts_warm_' . md5( $url );
+		$lock = 'easyfonts_warm_' . md5( UsageTracker::route_for( $url ) );
 
-		// One in-flight warm per URL at a time.
+		// One in-flight warm per route at a time.
 		if ( get_transient( $lock ) ) {
 			return;
 		}
@@ -208,14 +234,18 @@ class OutputBuffer {
 	 * hero fonts before it even parses the stylesheet), then the consolidated
 	 * stylesheet, then the metric-matched fallback faces.
 	 *
+	 * @param string             $route      Canonical route for this page.
+	 * @param string             $device     Device ('mobile'|'desktop').
+	 * @param array<string,bool> $above_fold Lowercased families above the fold on this route.
 	 * @return string
 	 */
-	private function build_head(): string {
+	private function build_head( string $route = '', string $device = 'any', array $above_fold = array() ): string {
 		$out        = '';
 		$stylesheet = Consolidator::stylesheet_url();
 
-		// Preloads — above the stylesheet, deduped inside SmartPreload.
-		$out .= ( new SmartPreload() )->build();
+		// Preloads — above the stylesheet, deduped inside SmartPreload, scoped
+		// to the fonts actually emitted on this page (Consolidator::touched).
+		$out .= ( new SmartPreload() )->build( $route, $device, $this->present_families(), $above_fold );
 
 		// The single consolidated stylesheet — either inlined (non-render-
 		// blocking: no extra request) or as a normal <link>.
@@ -259,13 +289,59 @@ class OutputBuffer {
 	}
 
 	/**
-	 * Persist hosted-font observations for this URL.
+	 * Lowercased set of families actually emitted on this page (from the
+	 * consolidator's "touched" list), used to gate preload so a font is never
+	 * preloaded on a page that doesn't use it.
+	 *
+	 * @return array<string,bool>
 	 */
-	private function log_usage(): void {
+	private function present_families(): array {
+		$out = array();
+
+		foreach ( Consolidator::touched() as $t ) {
+			$out[ strtolower( (string) $t['family'] ) ] = true;
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Persist hosted-font observations for this URL.
+	 *
+	 * @param string $route Canonical route (path) for this page.
+	 */
+	private function log_usage( string $route = '' ): void {
 		$touched = Consolidator::touched();
 
 		if ( empty( $touched ) ) {
 			return;
+		}
+
+		// Key usage by the canonical route (path only). This keeps the buffer
+		// and the browser beacon on one identity per page, and prevents volatile
+		// query params (the warm cache-buster efbust, the easyfonts_probe key,
+		// builder/tracking flags) from minting duplicate rows.
+		if ( '' === $route ) {
+			$route = UsageTracker::current_route();
+		}
+
+		// Throttle this bookkeeping write to at most once per route per window.
+		// These rows only record "the plugin hosted these fonts here" (for the
+		// usage dashboard and GC freshness); the beacon — which drives page
+		// scoping and preload — records separately and is NOT throttled here. A
+		// warm/probe render always logs so "Optimize" reflects immediately.
+		if ( ! $this->force ) {
+			$lock = 'easyfonts_logged_' . md5( $route );
+
+			if ( get_transient( $lock ) ) {
+				return;
+			}
+
+			$ttl = (int) apply_filters( 'easyfonts_usage_log_throttle', HOUR_IN_SECONDS );
+
+			if ( $ttl > 0 ) {
+				set_transient( $lock, 1, $ttl );
+			}
 		}
 
 		$records = array();
@@ -280,8 +356,7 @@ class OutputBuffer {
 			);
 		}
 
-		$url = home_url( add_query_arg( array() ) );
-		( new UsageTracker() )->record( $url, (int) get_queried_object_id(), $records );
+		( new UsageTracker() )->record( $route, (int) get_queried_object_id(), $records );
 	}
 
 	/**
@@ -423,14 +498,38 @@ class OutputBuffer {
 			return false;
 		}
 
-		// Excluded URLs.
+		// Excluded URLs. Patterns are matched against the request PATH with
+		// explicit, anchored semantics (no loose substring matching, which made
+		// "/cart" also exclude "/cart-guide"):
+		//   - a pattern containing "*" is a glob (fnmatch), e.g. "/shop/*"
+		//   - otherwise it matches the exact path, or the path as a path-segment
+		//     prefix, e.g. "/cart" matches "/cart" and "/cart/checkout" but NOT
+		//     "/cart-guide".
 		$excluded = (array) Settings::get( 'excluded_urls', array() );
 		$path     = (string) wp_parse_url( home_url( add_query_arg( array() ) ), PHP_URL_PATH );
+		$path     = '' === $path ? '/' : $path;
 
 		foreach ( $excluded as $ex ) {
 			$ex = trim( (string) $ex );
 
-			if ( '' !== $ex && false !== strpos( $path, $ex ) ) {
+			if ( '' === $ex ) {
+				continue;
+			}
+
+			if ( false !== strpos( $ex, '*' ) ) {
+				if ( fnmatch( $ex, $path ) ) {
+					return false;
+				}
+				continue;
+			}
+
+			$norm = '/' . ltrim( $ex, '/' );
+
+			if ( $path === $norm || $path === rtrim( $norm, '/' ) ) {
+				return false;
+			}
+
+			if ( 0 === strpos( $path, rtrim( $norm, '/' ) . '/' ) ) {
 				return false;
 			}
 		}

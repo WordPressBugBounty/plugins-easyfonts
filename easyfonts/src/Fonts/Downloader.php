@@ -70,6 +70,78 @@ class Downloader {
 	);
 
 	/**
+	 * SSRF guard for stylesheet fetches. Unlike font binaries (locked to a
+	 * provider allow-list), CSS may legitimately be fetched from ANY public host
+	 * — that's how fonts hidden in third-party/CDN stylesheets are detected. So
+	 * here we don't allow-list hosts; we deny-list internal targets: non-HTTP(S)
+	 * schemes and any host that resolves to a private, reserved, loopback or
+	 * link-local address (e.g. 127.0.0.1, 10/8, 192.168/16, 169.254.169.254).
+	 * This blocks pointing the fetcher at internal services without affecting
+	 * any real public stylesheet. Filterable for intranet installs.
+	 *
+	 * @param string $url Absolute URL.
+	 * @return bool
+	 */
+	public static function is_public_url( string $url ): bool {
+		/**
+		 * Allow fetching from private/internal hosts (intranet installs).
+		 *
+		 * @param bool   $allow Default false.
+		 * @param string $url   The URL under test.
+		 */
+		if ( apply_filters( 'easyfonts_allow_private_fetch', false, $url ) ) {
+			return true;
+		}
+
+		$parts  = wp_parse_url( $url );
+		$scheme = strtolower( (string) ( $parts['scheme'] ?? '' ) );
+		$host   = (string) ( $parts['host'] ?? '' );
+
+		if ( ( 'http' !== $scheme && 'https' !== $scheme ) || '' === $host ) {
+			return false;
+		}
+
+		// Collect candidate IPs: literal host, or resolved A/AAAA records.
+		$ips = array();
+
+		if ( filter_var( $host, FILTER_VALIDATE_IP ) ) {
+			$ips[] = $host;
+		} else {
+			$v4 = gethostbynamel( $host );
+
+			if ( is_array( $v4 ) ) {
+				$ips = array_merge( $ips, $v4 );
+			}
+
+			if ( function_exists( 'dns_get_record' ) ) {
+				$v6 = @dns_get_record( $host, DNS_AAAA ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
+
+				if ( is_array( $v6 ) ) {
+					foreach ( $v6 as $rec ) {
+						if ( ! empty( $rec['ipv6'] ) ) {
+							$ips[] = $rec['ipv6'];
+						}
+					}
+				}
+			}
+		}
+
+		// Couldn't resolve → not a known-internal target; let the HTTP layer
+		// deal with it (it simply won't connect).
+		if ( empty( $ips ) ) {
+			return true;
+		}
+
+		foreach ( $ips as $ip ) {
+			if ( ! filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE ) ) {
+				return false; // private / reserved / loopback / link-local.
+			}
+		}
+
+		return true;
+	}
+
+	/**
 	 * Fetch CSS text from a font-provider URL.
 	 *
 	 * @param string $url Stylesheet URL.
@@ -86,6 +158,11 @@ class Downloader {
 
 		if ( is_string( $cached ) && '' !== $cached ) {
 			return $cached;
+		}
+
+		// SSRF guard: never fetch a stylesheet from an internal/private address.
+		if ( ! self::is_public_url( $url ) ) {
+			return null;
 		}
 
 		$response = wp_remote_get(
@@ -201,6 +278,11 @@ class Downloader {
 		$css = wp_remote_retrieve_body( $response );
 
 		if ( ! preg_match( '/src\s*:\s*[^;]*?url\(\s*[\'"]?([^\'")]+\.(?:ttf|otf))[\'"]?\s*\)/i', $css, $m ) ) {
+			return null;
+		}
+
+		// The font URL comes out of fetched CSS — guard it the same way.
+		if ( ! self::is_public_url( $m[1] ) ) {
 			return null;
 		}
 

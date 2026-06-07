@@ -108,6 +108,20 @@ class StylesheetFetcher {
 	private function url_to_path( string $url ): ?string {
 		$url = strtok( $url, '?' ); // Drop query (dynamic CSS handled elsewhere).
 
+		// LFI guard. A linked stylesheet is always a real .css file with no
+		// path-traversal. Reject anything else BEFORE it can touch the disk, so
+		// a crafted href like "/wp-config.php" or "/a/../../../etc/passwd" can
+		// never be read. Decode first so percent-encoded "%2e%2e" is caught too.
+		$path = (string) wp_parse_url( $url, PHP_URL_PATH );
+
+		if ( false !== strpos( rawurldecode( (string) $url ), '..' ) ) {
+			return null;
+		}
+
+		if ( ! preg_match( '/\.css$/i', $path ) ) {
+			return null;
+		}
+
 		$content_url = content_url();
 
 		if ( str_starts_with( $url, $content_url ) ) {

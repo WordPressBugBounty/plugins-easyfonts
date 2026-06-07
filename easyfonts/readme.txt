@@ -1,14 +1,14 @@
-=== EasyFonts – Host Google Fonts Locally, GDPR Compliant ===
+=== EasyFonts – Host Google Fonts Locally, Fast & Auto-Optimize, GDPR Compliant ===
 Contributors: easywpstuff
 Tags: google fonts, host google fonts locally, gdpr, core web vitals, font optimization
 Requires at least: 6.4
-Tested up to: 6.8
+Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.0.1
+Stable tag: 2.0.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Host Google Fonts locally, fix render-blocking fonts, and pass Core Web Vitals — GDPR compliant, zero-config, and measures what actually renders.
+Host Google Fonts locally, Auto combine and remove duplicate fonts, Auto preload. pass Core Web Vitals — GDPR compliant, auto-config.
 
 == Description ==
 
@@ -118,6 +118,20 @@ Yes. It finds font stylesheets across your whole page — themes, plugins, and b
 
 == Changelog ==
 
+
+= 2.0.2 =
+* New: per-page font scoping. Each page now loads only the fonts it actually uses. Many themes (e.g. Blocksy) enqueue their whole Google-fonts set on every page; Easy Fonts now measures what each page really renders (in a real browser) and leaves the unused families off that page's stylesheet — while still hosting them on the pages that do use them. Matching is done at the family level and is self-correcting: a font is scoped out only after the page has been measured, it returns automatically if the page starts using it, and a font is never dropped from a page that hasn't been measured yet.
+* Fixed: a font declared on a page is no longer wrongly dropped from the combined CSS because of a weight/style mismatch (e.g. a single-weight family used at a bold weight). Usage is now matched per family.
+* Improved: the combined stylesheet is unique per page font-set and shared when identical. Pages that use the same fonts reuse the same cached file; a page with a different set gets its own. Identical sets are never regenerated, saving CPU and disk.
+* Improved: used/unused classification stays current. Beacon measurements now refresh hourly instead of being locked for a week, so a font that starts (or stops) being used is reflected quickly, and "Optimize" forces an immediate fresh measurement of the homepage.
+* Fixed: preloads are accurate and page-specific. A font is preloaded on a page only when it actually renders above the fold there (matched per family, so a face the browser shows at a different weight than the hosted file — e.g. a single-weight family shown bold — still preloads correctly). A font above the fold on just one page is preloaded only on that page; a font above the fold on every page is preloaded everywhere from a cached set, with no per-page lookup. Your manual "always preload" choices are respected wherever the family is used.
+* Fixed: page counts and usage are keyed by the page path, so cache-buster and probe parameters (and tracking/builder query strings) can no longer inflate the dashboard with duplicate rows.
+* Improved: URL exclusions now match precisely — "/cart" no longer also excludes "/cart-guide". Patterns match the exact path or a path-segment prefix, and support wildcards (e.g. "/shop/*").
+* Improved: when the master toggle is off, Easy Fonts adds nothing at all to the front end (no measurement or helper scripts).
+* Improved: front-end scripts are now served minified.
+* Performance: fewer database writes per page render (font registration is batched), usage logging is batched into a single write and rate-limited per page, and a dead database index was retired.
+* Security/hardening: strict sanitisation of all values written into the generated @font-face CSS; stylesheet fetching is restricted to public hosts (internal/private addresses are blocked) with parsed-host provider matching; and local stylesheet reads are limited to genuine .css files with path-traversal blocked.
+* Developer: filters `easyfonts_page_scope_fonts` (set false to disable per-page scoping), `easyfonts_force_families` (always-load safelist), `easyfonts_preload_cap`, and `easyfonts_beacon_throttle_hours`.
 
 = 2.0.1 =
 * Fixed: rare white screen / blank front-end on some hosts (esp. FastCGI/cgi-fcgi). Font binaries are no longer downloaded during a visitor's page render — they are fetched by a non-blocking background warm request, so a slow or blocked outbound connection can never stall the page.

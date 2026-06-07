@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
  */
 class Migrator {
 
-	const DB_VERSION = '2.0.0';
+	const DB_VERSION = '2.0.1';
 
 	/**
 	 * Install, upgrade, or repair tables. Safe to call on every load.
@@ -123,8 +123,7 @@ class Migrator {
 				last_seen DATETIME DEFAULT NULL,
 				PRIMARY KEY  (id),
 				UNIQUE KEY uq_usage (usage_key),
-				KEY idx_family (family),
-				KEY idx_page (page_id)
+				KEY idx_family (family)
 			) {$charset};"
 		);
 
@@ -141,6 +140,37 @@ class Migrator {
 				UNIQUE KEY uq_route (route_key)
 			) {$charset};"
 		);
+
+		// dbDelta never DROPs an index that exists in the table but not in the
+		// definition, so retire the now-unused usage.idx_page (it indexed a
+		// column we never query) explicitly. Guarded + idempotent: only runs
+		// when the index is actually present, and a failure can't break install.
+		$this->drop_index_if_exists( 'easyfonts_usage', 'idx_page' );
+	}
+
+	/**
+	 * Drop an index from a table if it exists. Safe no-op otherwise.
+	 *
+	 * @param string $name  Unprefixed table name.
+	 * @param string $index Index name.
+	 * @return void
+	 */
+	private function drop_index_if_exists( string $name, string $index ): void {
+		global $wpdb;
+
+		if ( ! $this->table_exists( $name ) ) {
+			return;
+		}
+
+		$table = $wpdb->prefix . $name;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$found = $wpdb->get_var( $wpdb->prepare( "SHOW INDEX FROM `{$table}` WHERE Key_name = %s", $index ) );
+
+		if ( $found ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+			$wpdb->query( "ALTER TABLE `{$table}` DROP INDEX `{$index}`" );
+		}
 	}
 
 	/**
