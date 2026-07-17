@@ -128,7 +128,8 @@
 			unload: data.unload
 		} );
 
-		var url = CFG.endpoint + '?_wpnonce=' + encodeURIComponent( CFG.nonce );
+		var url = CFG.endpoint + '?_wpnonce=' + encodeURIComponent( CFG.nonce )
+			+ ( CFG.token ? '&_eftoken=' + encodeURIComponent( CFG.token ) : '' );
 
 		if ( navigator.sendBeacon ) {
 			navigator.sendBeacon( url, new Blob( [ payload ], { type: 'application/json' } ) );

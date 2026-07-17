@@ -50,7 +50,13 @@ class UsageTracker {
 	public static function route_for( string $url ): string {
 		$path = (string) wp_parse_url( $url, PHP_URL_PATH );
 
-		return '' === $path ? '/' : $path;
+		if ( '' === $path ) {
+			return '/';
+		}
+
+		// Guarantee a canonical leading slash — malformed input (e.g. a bare
+		// scheme string) must never mint a route outside the path namespace.
+		return '/' === $path[0] ? $path : '/' . $path;
 	}
 
 	/**
@@ -76,7 +82,7 @@ class UsageTracker {
 			return;
 		}
 
-		$now   = current_time( 'mysql' );
+		$now   = gmdate( 'Y-m-d H:i:s' ); // UTC — compared against UTC_TIMESTAMP() in gc().
 		$table = $this->usage_table();
 
 		// Collapse to one row per (page, family, weight, style); merge any
@@ -130,7 +136,11 @@ class UsageTracker {
 		$args         = array();
 
 		foreach ( $by_key as $row ) {
-			$placeholders[] = '(%s,%s,%d,%s,%s,%s,%s,%d,%d,1,%s)';
+			// A beacon measurement that saw the variant loaded but not rendered
+			// counts one "miss" toward the scope-out corroboration threshold.
+			$miss = ( 'beacon' === $row['origin'] && 0 === $row['rendered'] ) ? 1 : 0;
+
+			$placeholders[] = '(%s,%s,%d,%s,%s,%s,%s,%d,%d,1,%d,%s)';
 			array_push(
 				$args,
 				$row['key'],
@@ -142,19 +152,27 @@ class UsageTracker {
 				$row['origin'],
 				$row['rendered'],
 				$row['above_fold'],
+				$miss,
 				$now
 			);
 		}
 
+		$alias = $this->dup_alias();
+
 		$sql = "INSERT INTO {$table}
-				(usage_key, page_url, page_id, family, weight, style, origin, rendered, above_fold, hits, last_seen)
-			 VALUES " . implode( ',', $placeholders ) . "
+				(usage_key, page_url, page_id, family, weight, style, origin, rendered, above_fold, hits, beacon_misses, last_seen)
+			 VALUES " . implode( ',', $placeholders ) . "{$alias}
 			 ON DUPLICATE KEY UPDATE
 				hits       = hits + 1,
-				rendered   = GREATEST(rendered, VALUES(rendered)),
-				above_fold = GREATEST(above_fold, VALUES(above_fold)),
-				origin     = VALUES(origin),
-				last_seen  = VALUES(last_seen)";
+				rendered   = GREATEST(rendered, {$this->dup( 'rendered' )}),
+				above_fold = GREATEST(above_fold, {$this->dup( 'above_fold' )}),
+				origin     = {$this->dup( 'origin' )},
+				beacon_misses = CASE
+					WHEN {$this->dup( 'origin' )} = 'beacon' AND {$this->dup( 'rendered' )} = 1 THEN 0
+					WHEN {$this->dup( 'origin' )} = 'beacon' AND {$this->dup( 'rendered' )} = 0 THEN beacon_misses + 1
+					ELSE beacon_misses
+				END,
+				last_seen  = {$this->dup( 'last_seen' )}";
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared
 		$wpdb->query( $wpdb->prepare( $sql, $args ) );
@@ -235,7 +253,8 @@ class UsageTracker {
 				"SELECT family,
 					MAX(rendered) AS rnd,
 					MAX(CASE WHEN rendered = 1 THEN above_fold ELSE 0 END) AS af,
-					MAX(CASE WHEN origin = 'beacon' THEN 1 ELSE 0 END) AS beaconed
+					MAX(CASE WHEN origin = 'beacon' THEN 1 ELSE 0 END) AS beaconed,
+					MAX(beacon_misses) AS misses
 				 FROM {$this->usage_table()}
 				 WHERE page_url = %s
 				 GROUP BY family",
@@ -243,6 +262,16 @@ class UsageTracker {
 			),
 			ARRAY_A
 		);
+
+		/**
+		 * Consistent beacon measurements required before a never-rendered
+		 * family is scoped off a page. Corroboration means one bad or forged
+		 * report can't remove a font (beacons are throttled hourly, so this is
+		 * also a minimum observation window).
+		 *
+		 * @param int $min
+		 */
+		$min_misses = max( 1, (int) apply_filters( 'easyfonts_scope_out_min_measurements', 2 ) );
 
 		if ( $rows ) {
 			foreach ( $rows as $r ) {
@@ -260,8 +289,9 @@ class UsageTracker {
 					if ( ! empty( $r['af'] ) ) {
 						$out['above_fold'][ $fam ] = true;
 					}
-				} elseif ( $beaconed ) {
-					// Beacon measured it and never saw it render → scope out.
+				} elseif ( $beaconed && (int) $r['misses'] >= $min_misses ) {
+					// Multiple beacons measured it and never saw it render →
+					// confirmed scope-out.
 					$out['scope_out'][ $fam ] = true;
 				}
 			}
@@ -340,22 +370,24 @@ class UsageTracker {
 
 		$key = sha1( $route . '|' . $device );
 
+		$alias = $this->dup_alias();
+
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
 		$wpdb->query(
 			$wpdb->prepare(
 				"INSERT INTO {$this->decisions_table()}
 					(route_key, route, device, preload, unload, updated_at)
-				 VALUES (%s,%s,%s,%s,%s,%s)
+				 VALUES (%s,%s,%s,%s,%s,%s){$alias}
 				 ON DUPLICATE KEY UPDATE
-					preload    = VALUES(preload),
-					unload     = VALUES(unload),
-					updated_at = VALUES(updated_at)",
+					preload    = {$this->dup( 'preload' )},
+					unload     = {$this->dup( 'unload' )},
+					updated_at = {$this->dup( 'updated_at' )}",
 				$key,
 				$route,
 				$device,
 				wp_json_encode( array_values( $preload ) ),
 				wp_json_encode( array_values( $unload ) ),
-				current_time( 'mysql' )
+				gmdate( 'Y-m-d H:i:s' ) // UTC — parsed as UTC in has_fresh_decision().
 			)
 		);
 	}
@@ -458,23 +490,26 @@ class UsageTracker {
 		$usage = $this->usage_table();
 		$dec   = $this->decisions_table();
 
-		// 1. Time-based prune (usage + decisions).
+		// 1. Time-based prune (usage + decisions). Timestamps are stored in
+		// UTC, so compare against UTC_TIMESTAMP() (not session-TZ NOW()).
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery
 		$wpdb->query(
 			$wpdb->prepare(
-				"DELETE FROM {$usage} WHERE last_seen IS NOT NULL AND last_seen < ( NOW() - INTERVAL %d DAY )",
+				"DELETE FROM {$usage} WHERE last_seen IS NOT NULL AND last_seen < ( UTC_TIMESTAMP() - INTERVAL %d DAY )",
 				$days
 			)
 		);
 		$wpdb->query(
 			$wpdb->prepare(
-				"DELETE FROM {$dec} WHERE updated_at IS NOT NULL AND updated_at < ( NOW() - INTERVAL %d DAY )",
+				"DELETE FROM {$dec} WHERE updated_at IS NOT NULL AND updated_at < ( UTC_TIMESTAMP() - INTERVAL %d DAY )",
 				$days
 			)
 		);
 		// phpcs:enable
 
 		// 2. Hard cap: if usage still exceeds the cap, drop the oldest surplus.
+		// The id-bounded form is deterministic (replication-safe), unlike a bare
+		// DELETE ... ORDER BY ... LIMIT.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared
 		$total = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$usage}" );
 
@@ -484,8 +519,34 @@ class UsageTracker {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
 			$wpdb->query(
 				$wpdb->prepare(
-					"DELETE FROM {$usage} ORDER BY last_seen ASC LIMIT %d",
+					"DELETE FROM {$usage} WHERE id IN (
+						SELECT id FROM ( SELECT id FROM {$usage} ORDER BY last_seen ASC, id ASC LIMIT %d ) AS ef_tmp
+					)",
 					$surplus
+				)
+			);
+		}
+
+		// 3. Hard cap on decisions rows too — beacon routes are public input, so
+		// without a cap the table could be grown without bound between prunes.
+		/**
+		 * Hard cap on decision rows after time-based pruning.
+		 *
+		 * @param int $max
+		 */
+		$max_dec = max( 100, (int) apply_filters( 'easyfonts_gc_max_decision_rows', 2000 ) );
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared
+		$total_dec = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$dec}" );
+
+		if ( $total_dec > $max_dec ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+			$wpdb->query(
+				$wpdb->prepare(
+					"DELETE FROM {$dec} WHERE id IN (
+						SELECT id FROM ( SELECT id FROM {$dec} ORDER BY updated_at ASC, id ASC LIMIT %d ) AS ef_tmp
+					)",
+					$total_dec - $max_dec
 				)
 			);
 		}
@@ -523,7 +584,52 @@ class UsageTracker {
 			return false;
 		}
 
-		return ( time() - strtotime( (string) $updated ) ) < ( max( 1, $fresh_hours ) * HOUR_IN_SECONDS );
+		// Stored in UTC — parse it as UTC regardless of PHP's default timezone.
+		return ( time() - strtotime( (string) $updated . ' UTC' ) ) < ( max( 1, $fresh_hours ) * HOUR_IN_SECONDS );
+	}
+
+	/**
+	 * ON DUPLICATE KEY UPDATE row reference, portable across servers.
+	 *
+	 * MySQL 8.0.20 deprecated VALUES() in ON DUPLICATE KEY UPDATE in favour of
+	 * a row alias — which MariaDB does not support. Detect the server once and
+	 * emit whichever syntax is native, so neither engine logs deprecation
+	 * warnings nor breaks when VALUES() is eventually removed.
+	 *
+	 * @param string $column Column name.
+	 * @return string SQL fragment referencing the incoming row's value.
+	 */
+	private function dup( string $column ): string {
+		return $this->use_row_alias() ? "ef_new.{$column}" : "VALUES({$column})";
+	}
+
+	/**
+	 * Row-alias suffix for the INSERT (empty when using VALUES()).
+	 *
+	 * @return string
+	 */
+	private function dup_alias(): string {
+		return $this->use_row_alias() ? ' AS ef_new' : '';
+	}
+
+	/**
+	 * Should upserts use the MySQL 8.0.19+ row-alias syntax?
+	 *
+	 * @return bool
+	 */
+	private function use_row_alias(): bool {
+		static $use = null;
+
+		if ( null === $use ) {
+			global $wpdb;
+
+			$info       = method_exists( $wpdb, 'db_server_info' ) ? (string) $wpdb->db_server_info() : '';
+			$is_mariadb = false !== stripos( $info, 'mariadb' );
+
+			$use = ! $is_mariadb && '' !== $info && version_compare( (string) $wpdb->db_version(), '8.0.19', '>=' );
+		}
+
+		return $use;
 	}
 
 	/**

@@ -103,6 +103,7 @@ class Command {
 
 		delete_option( 'easyfonts_processed_local' );
 		delete_option( 'easyfonts_processed_external' );
+		delete_option( 'easyfonts_warm_key' ); // Rotate the loopback secret.
 
 		$settings              = Settings::all();
 		$settings['detectors'] = array();
@@ -121,6 +122,7 @@ class Command {
 
 		delete_option( 'easyfonts_processed_local' );
 		delete_option( 'easyfonts_processed_external' );
+		delete_option( 'easyfonts_warm_key' ); // Rotate the loopback secret.
 
 		$settings              = Settings::all();
 		$settings['detectors'] = array();

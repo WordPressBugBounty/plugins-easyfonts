@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
  */
 class Migrator {
 
-	const DB_VERSION = '2.0.1';
+	const DB_VERSION = '2.0.2';
 
 	/**
 	 * Install, upgrade, or repair tables. Safe to call on every load.
@@ -120,10 +120,12 @@ class Migrator {
 				rendered TINYINT(1) NOT NULL DEFAULT 0,
 				above_fold TINYINT(1) NOT NULL DEFAULT 0,
 				hits BIGINT UNSIGNED NOT NULL DEFAULT 1,
+				beacon_misses SMALLINT UNSIGNED NOT NULL DEFAULT 0,
 				last_seen DATETIME DEFAULT NULL,
 				PRIMARY KEY  (id),
 				UNIQUE KEY uq_usage (usage_key),
-				KEY idx_family (family)
+				KEY idx_family (family),
+				KEY idx_last_seen (last_seen)
 			) {$charset};"
 		);
 
@@ -137,7 +139,8 @@ class Migrator {
 				unload LONGTEXT DEFAULT NULL,
 				updated_at DATETIME DEFAULT NULL,
 				PRIMARY KEY  (id),
-				UNIQUE KEY uq_route (route_key)
+				UNIQUE KEY uq_route (route_key),
+				KEY idx_updated (updated_at)
 			) {$charset};"
 		);
 
@@ -197,6 +200,7 @@ class Migrator {
 			&& $this->column_exists( 'easyfonts_fonts', 'load_user_set' )
 			&& $this->column_exists( 'easyfonts_fonts', 'preload_user_set' )
 			&& $this->column_exists( 'easyfonts_usage', 'usage_key' )
+			&& $this->column_exists( 'easyfonts_usage', 'beacon_misses' )
 			&& $this->column_exists( 'easyfonts_decisions', 'route_key' );
 	}
 

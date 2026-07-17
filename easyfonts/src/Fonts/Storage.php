@@ -51,7 +51,13 @@ class Storage {
 	 * @return string
 	 */
 	public function path( string $filename ): string {
-		$filename = str_replace( array( '../', '..\\', "\0" ), '', ltrim( $filename, '/' ) );
+		$filename = str_replace( "\0", '', ltrim( $filename, '/' ) );
+
+		// Iteratively strip '..' so a removal can never re-form a traversal
+		// sequence (a single-pass '../' replace turns '....//' into '../').
+		while ( false !== strpos( $filename, '..' ) ) {
+			$filename = str_replace( '..', '', $filename );
+		}
 
 		return trailingslashit( EASYFONTS_CACHE_DIR ) . $filename;
 	}

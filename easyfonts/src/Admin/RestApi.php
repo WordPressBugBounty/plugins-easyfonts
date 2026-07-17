@@ -138,6 +138,29 @@ class RestApi {
 	}
 
 	/**
+	 * Authorise a public (beacon / async-fonts) request: accept the cache-safe
+	 * site token, or a valid REST nonce (fresh, uncached pages).
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return bool
+	 */
+	private function public_request_authorized( WP_REST_Request $request ): bool {
+		$token = (string) $request->get_param( '_eftoken' );
+
+		if ( '' !== $token && hash_equals( Settings::beacon_token(), $token ) ) {
+			return true;
+		}
+
+		$nonce = $request->get_header( 'X-WP-Nonce' );
+
+		if ( ! $nonce ) {
+			$nonce = $request->get_param( '_wpnonce' );
+		}
+
+		return (bool) wp_verify_nonce( (string) $nonce, 'wp_rest' );
+	}
+
+	/**
 	 * Capability gate.
 	 *
 	 * @return bool
@@ -418,6 +441,7 @@ class RestApi {
 
 		delete_option( 'easyfonts_processed_local' );
 		delete_option( 'easyfonts_processed_external' );
+		delete_option( 'easyfonts_warm_key' ); // Rotate the loopback secret.
 
 		$settings              = Settings::all();
 		$settings['detectors'] = array();
@@ -439,6 +463,7 @@ class RestApi {
 
 		delete_option( 'easyfonts_processed_local' );
 		delete_option( 'easyfonts_processed_external' );
+		delete_option( 'easyfonts_warm_key' ); // Rotate the loopback secret.
 		delete_transient( 'easyfonts_schema_checked' );
 
 		$settings              = Settings::all();
@@ -471,13 +496,7 @@ class RestApi {
 	 * @return WP_REST_Response
 	 */
 	public function beacon( WP_REST_Request $request ): WP_REST_Response {
-		$nonce = $request->get_header( 'X-WP-Nonce' );
-
-		if ( ! $nonce ) {
-			$nonce = $request->get_param( '_wpnonce' );
-		}
-
-		if ( ! wp_verify_nonce( (string) $nonce, 'wp_rest' ) ) {
+		if ( ! $this->public_request_authorized( $request ) ) {
 			return new WP_REST_Response( array( 'ok' => false ), 403 );
 		}
 
@@ -485,8 +504,11 @@ class RestApi {
 		$route  = sanitize_text_field( $params['route'] ?? '/' );
 		$device = in_array( $params['device'] ?? '', array( 'mobile', 'desktop' ), true ) ? $params['device'] : 'any';
 
-		// Cap the route length to keep the indexed column sane.
-		$route = '' === $route ? '/' : substr( $route, 0, 480 );
+		// Normalise to a canonical path (leading '/', no query/scheme) so
+		// crafted route strings can't mint arbitrary rows, then cap the length
+		// to keep the indexed column sane.
+		$route = UsageTracker::route_for( $route );
+		$route = substr( $route, 0, 480 );
 
 		$usage = new UsageTracker();
 
@@ -605,13 +627,7 @@ class RestApi {
 	 * @return WP_REST_Response
 	 */
 	public function async_fonts( WP_REST_Request $request ): WP_REST_Response {
-		$nonce = $request->get_header( 'X-WP-Nonce' );
-
-		if ( ! $nonce ) {
-			$nonce = $request->get_param( '_wpnonce' );
-		}
-
-		if ( ! wp_verify_nonce( (string) $nonce, 'wp_rest' ) ) {
+		if ( ! $this->public_request_authorized( $request ) ) {
 			return new WP_REST_Response( array( 'ok' => false ), 403 );
 		}
 
@@ -647,8 +663,22 @@ class RestApi {
 
 		if ( count( $stored ) !== $before ) {
 			update_option( 'easyfonts_async_urls', array_values( $stored ), false );
-			// New runtime fonts discovered → invalidate so the next render hosts them.
-			Settings::bump_buster();
+
+			// New runtime fonts discovered → invalidate so the next render hosts
+			// them. Rate-limited: this is public input, and every bump drops the
+			// CSS fetch cache site-wide, so crafted unique URLs must not be able
+			// to thrash it.
+			if ( ! get_transient( 'easyfonts_async_bump_lock' ) ) {
+				/**
+				 * Minimum seconds between async-endpoint cache-buster bumps.
+				 *
+				 * @param int $interval
+				 */
+				$interval = max( 60, (int) apply_filters( 'easyfonts_async_bump_interval', 5 * MINUTE_IN_SECONDS ) );
+
+				set_transient( 'easyfonts_async_bump_lock', 1, $interval );
+				Settings::bump_buster();
+			}
 		}
 
 		return new WP_REST_Response( array( 'ok' => true, 'queued' => count( $stored ) ), 200 );

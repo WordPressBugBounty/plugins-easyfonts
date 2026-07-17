@@ -3,7 +3,7 @@
  * Plugin Name:       Easy Fonts
  * Plugin URI:        https://fluxpress.io
  * Description:       Detect, self-host, preload, and trim Google Fonts automatically — reliably, with zero-CLS metric-matched fallbacks. Built on WordPress's native HTML API.
- * Version:           2.0.2
+ * Version:           2.0.3
  * Author:            Uzair
  * Author URI:        https://fluxpress.io
  * License:           GPL-2.0-or-later
@@ -18,7 +18,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'EASYFONTS_VERSION', '2.0.2' );
+define( 'EASYFONTS_VERSION', '2.0.3' );
 define( 'EASYFONTS_FILE', __FILE__ );
 define( 'EASYFONTS_DIR', plugin_dir_path( __FILE__ ) );
 define( 'EASYFONTS_URL', plugin_dir_url( __FILE__ ) );

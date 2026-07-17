@@ -48,6 +48,11 @@ class Downloader {
 	const UA_WOFF2 = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0';
 
 	/**
+	 * Transient value marking a recently-failed CSS fetch (negative cache).
+	 */
+	const FAIL_MARKER = '__easyfonts_fetch_failed__';
+
+	/**
 	 * Old UA that makes the API return TTF (used for metric extraction only).
 	 */
 	const UA_TTF = 'Mozilla/5.0 (Windows NT 6.1; rv:27.0) Gecko/20100101 Firefox/27.0';
@@ -156,30 +161,51 @@ class Downloader {
 		$cache_key = 'easyfonts_css_' . md5( $url . '|' . \EasyFonts\Settings::buster() );
 		$cached    = get_transient( $cache_key );
 
+		// Negative cache: a recently-failed fetch is not retried on every render,
+		// so a dead/blocked CSS host can never add its full timeout to each view.
+		if ( self::FAIL_MARKER === $cached ) {
+			return null;
+		}
+
 		if ( is_string( $cached ) && '' !== $cached ) {
 			return $cached;
 		}
 
+		/**
+		 * How long a failed stylesheet fetch is remembered before retrying.
+		 *
+		 * @param int $ttl Seconds.
+		 */
+		$fail_ttl = (int) apply_filters( 'easyfonts_css_fail_ttl', HOUR_IN_SECONDS );
+
 		// SSRF guard: never fetch a stylesheet from an internal/private address.
 		if ( ! self::is_public_url( $url ) ) {
+			set_transient( $cache_key, self::FAIL_MARKER, $fail_ttl );
 			return null;
 		}
 
 		$response = wp_remote_get(
 			$url,
 			array(
-				'timeout'    => 10,
+				/**
+				 * Timeout for stylesheet fetches (seconds).
+				 *
+				 * @param int $timeout
+				 */
+				'timeout'    => (int) apply_filters( 'easyfonts_css_timeout', 10 ),
 				'user-agent' => apply_filters( 'easyfonts_css_user_agent', self::UA_WOFF2 ),
 			)
 		);
 
 		if ( is_wp_error( $response ) || 200 !== (int) wp_remote_retrieve_response_code( $response ) ) {
+			set_transient( $cache_key, self::FAIL_MARKER, $fail_ttl );
 			return null;
 		}
 
 		$body = wp_remote_retrieve_body( $response );
 
 		if ( '' === $body ) {
+			set_transient( $cache_key, self::FAIL_MARKER, $fail_ttl );
 			return null;
 		}
 

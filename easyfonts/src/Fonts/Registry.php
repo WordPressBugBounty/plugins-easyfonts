@@ -116,6 +116,25 @@ class Registry {
 			$formats[]         = '%s';
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
 			$wpdb->insert( $table, $row, $formats );
+
+			// Duplicate key: a concurrent request inserted the same variant
+			// between our SELECT and INSERT. Fall back to an update so the
+			// write still lands instead of surfacing a spurious error.
+			if ( ! empty( $wpdb->last_error ) && false !== stripos( $wpdb->last_error, 'duplicate' ) ) {
+				unset( $row['created_at'] );
+				array_pop( $formats );
+
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+				$winner = $wpdb->get_var(
+					$wpdb->prepare( "SELECT id FROM {$table} WHERE variant_key = %s", $key )
+				);
+
+				if ( $winner ) {
+					$wpdb->last_error = '';
+					// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+					$wpdb->update( $table, $row, array( 'id' => (int) $winner ), $formats, array( '%d' ) );
+				}
+			}
 		}
 
 		if ( ! empty( $wpdb->last_error ) ) {
@@ -530,7 +549,7 @@ class Registry {
 					( weight = %s AND style = %s ) DESC,
 					( style = %s ) DESC,
 					( subset = 'latin' ) DESC,
-					ABS( CAST( NULLIF(weight,'') AS UNSIGNED ) - %d ) ASC,
+					ABS( CAST( COALESCE( NULLIF(weight,''), '400' ) AS SIGNED ) - %d ) ASC,
 					id ASC
 				 LIMIT 1",
 				$family,

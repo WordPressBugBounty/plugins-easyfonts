@@ -208,7 +208,14 @@ class OutputBuffer {
 			return;
 		}
 
-		set_transient( $lock, 1, 60 );
+		// Claim with a per-request token and re-read: if two requests raced
+		// through the check above, only the one whose token survived proceeds.
+		$claim = wp_generate_password( 8, false, false );
+		set_transient( $lock, $claim, 60 );
+
+		if ( get_transient( $lock ) !== $claim ) {
+			return;
+		}
 
 		$target = add_query_arg(
 			array(
@@ -256,11 +263,24 @@ class OutputBuffer {
 				$file = Consolidator::stylesheet_file();
 
 				if ( '' !== $file ) {
-					$storage = new Storage();
-					$css     = $storage->exists( $file ) ? (string) @file_get_contents( $storage->path( $file ) ) : ''; // phpcs:ignore WordPress.WP.AlternativeFunctions
+					// The stylesheet content is deterministic for its filename
+					// (content-hash keyed), so cache the minified result instead
+					// of re-reading + re-minifying the file on every request.
+					$cache_key = 'easyfonts_inline_' . md5( $file );
+					$css       = get_transient( $cache_key );
+
+					if ( ! is_string( $css ) || '' === $css ) {
+						$storage = new Storage();
+						$raw     = $storage->exists( $file ) ? (string) @file_get_contents( $storage->path( $file ) ) : ''; // phpcs:ignore WordPress.WP.AlternativeFunctions
+						$css     = '' !== $raw ? $this->minify_css( $raw ) : '';
+
+						if ( '' !== $css ) {
+							set_transient( $cache_key, $css, DAY_IN_SECONDS );
+						}
+					}
 
 					if ( '' !== $css ) {
-						$out    .= '<style id="easyfonts-fonts">' . $this->minify_css( $css ) . '</style>' . "\n";
+						$out    .= '<style id="easyfonts-fonts">' . $css . '</style>' . "\n";
 						$inlined = true;
 					}
 				}

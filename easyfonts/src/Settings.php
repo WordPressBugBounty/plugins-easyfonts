@@ -134,6 +134,21 @@ class Settings {
 	}
 
 	/**
+	 * Cache-safe token authorising the public beacon endpoints.
+	 *
+	 * REST nonces expire (~24h), so a nonce baked into a page-cached HTML copy
+	 * eventually 403s every beacon on exactly the cached, high-traffic sites
+	 * this plugin targets. This site-secret-derived token doesn't expire, so
+	 * cached pages keep reporting. It grants only what the endpoints already
+	 * allowed anonymously (throttled, capped measurement ingest) — no more.
+	 *
+	 * @return string
+	 */
+	public static function beacon_token(): string {
+		return hash_hmac( 'sha256', 'easyfonts-beacon-v1', wp_salt( 'nonce' ) );
+	}
+
+	/**
 	 * Bump the cache-buster (after re-optimisation / purge).
 	 */
 	public static function bump_buster(): void {

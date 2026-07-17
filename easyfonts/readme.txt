@@ -4,7 +4,7 @@ Tags: google fonts, host google fonts locally, gdpr, core web vitals, font optim
 Requires at least: 6.4
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 2.0.2
+Stable tag: 2.0.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -118,6 +118,18 @@ Yes. It finds font stylesheets across your whole page — themes, plugins, and b
 
 == Changelog ==
 
+
+= 2.0.3 =
+* Fixed: database error "BIGINT UNSIGNED value is out of range" fired on nearly every render — Smart Preload's weight matching now uses signed arithmetic, so preloads work again on stock MySQL/MariaDB. Props @harryfear for the excellent report.
+* Fixed: beacon throttling and data retention were skewed on sites with a non-UTC timezone; all internal timestamps are now stored and compared in UTC.
+* Fixed: a failed external stylesheet fetch is now remembered (negative cache), so an unreachable CSS host can no longer add its full timeout to every page view. New filters: easyfonts_css_timeout, easyfonts_css_fail_ttl.
+* Fixed: the measurement beacon now works on page-cached sites — a cache-safe token authorises it, so an expired cached nonce no longer silently stops measurements.
+* Improved: a font is scoped off a page only after multiple consistent beacon measurements (filter easyfonts_scope_out_min_measurements, default 2), so a single bad or forged report can't remove a font.
+* Security: beacon routes are normalised to canonical paths, and the decisions table is now hard-capped in weekly cleanup (filter easyfonts_gc_max_decision_rows) so anonymous requests can't grow it without bound.
+* Security: cache-buster bumps from the async-fonts endpoint are rate-limited (filter easyfonts_async_bump_interval).
+* Security: the background warm key is rotated on Purge and Repair, and cache path handling is hardened against traversal re-forming.
+* Improved: upserts are deprecation-free on MySQL 8.0.20+ (row-alias syntax where supported; VALUES() retained on MariaDB, where it remains the native form).
+* Performance: the inlined font stylesheet is minified once and cached; a duplicate-insert race in font registration now falls back to an update; cleanup deletes are replication-safe; new indexes on usage/decision timestamps.
 
 = 2.0.2 =
 * New: per-page font scoping. Each page now loads only the fonts it actually uses. Many themes (e.g. Blocksy) enqueue their whole Google-fonts set on every page; Easy Fonts now measures what each page really renders (in a real browser) and leaves the unused families off that page's stylesheet — while still hosting them on the pages that do use them. Matching is done at the family level and is self-correcting: a font is scoped out only after the page has been measured, it returns automatically if the page starts using it, and a font is never dropped from a page that hasn't been measured yet.

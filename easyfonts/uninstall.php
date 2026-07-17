@@ -56,6 +56,7 @@ function easyfonts_purge_site(): void {
 			'easyfonts_last_beacon',
 			'easyfonts_global_preload',
 			'easyfonts_async_urls',
+			'easyfonts_warm_key',
 		) as $option
 	) {
 		delete_option( $option );

@@ -51,6 +51,7 @@ class Beacon {
 		$cfg = array(
 			'endpoint' => esc_url_raw( rest_url( 'easyfonts/v1/async-fonts' ) ),
 			'nonce'    => wp_create_nonce( 'wp_rest' ),
+			'token'    => Settings::beacon_token(),
 		);
 
 		$src = EASYFONTS_DIR . 'assets/frontend/async-blocker.min.js';
@@ -108,6 +109,7 @@ class Beacon {
 				array(
 					'endpoint' => esc_url_raw( rest_url( 'easyfonts/v1/beacon' ) ),
 					'nonce'    => wp_create_nonce( 'wp_rest' ),
+					'token'    => Settings::beacon_token(),
 					'route'    => '' === $route ? '/' : $route,
 					'device'   => $device,
 				)
