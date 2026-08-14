@@ -1,5 +1,5 @@
 === EasyFonts – Host Google Fonts Locally, Fast & Auto-Optimize, GDPR Compliant ===
-Contributors: easywpstuff
+Contributors: easywpstuff, uzairwp
 Tags: google fonts, host google fonts locally, gdpr, core web vitals, font optimization
 Requires at least: 6.4
 Tested up to: 7.0
