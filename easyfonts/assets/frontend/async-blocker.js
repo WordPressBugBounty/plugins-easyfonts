@@ -132,8 +132,11 @@
 		}
 
 		var payload = JSON.stringify( { urls: urls } );
-		var url = CFG.endpoint + '?_wpnonce=' + encodeURIComponent( CFG.nonce )
-			+ ( CFG.token ? '&_eftoken=' + encodeURIComponent( CFG.token ) : '' );
+		// The cache-safe token alone (2.0.4) — an expired nonce from a cached
+		// page makes WordPress reject the request before it reaches us.
+		var url = CFG.endpoint + ( CFG.endpoint.indexOf( '?' ) === -1 ? '?' : '&' ) + ( CFG.token
+			? '_eftoken=' + encodeURIComponent( CFG.token )
+			: '_wpnonce=' + encodeURIComponent( CFG.nonce ) );
 
 		if ( navigator.sendBeacon ) {
 			navigator.sendBeacon( url, new Blob( [ payload ], { type: 'application/json' } ) );
@@ -142,7 +145,9 @@
 				var xhr = new XMLHttpRequest();
 				xhr.open( 'POST', url, true );
 				xhr.setRequestHeader( 'Content-Type', 'application/json' );
-				xhr.setRequestHeader( 'X-WP-Nonce', CFG.nonce );
+				if ( ! CFG.token ) {
+					xhr.setRequestHeader( 'X-WP-Nonce', CFG.nonce );
+				}
 				xhr.send( payload );
 			} catch ( e ) {}
 		}

@@ -916,8 +916,7 @@ class Consolidator {
 
 	/**
 	 * Register every variant and write one consolidated stylesheet. The file is
-	 * keyed by the variant set + display + subsets, so pages sharing fonts share
-	 * the file.
+	 * named by its content, so pages sharing fonts share the file.
 	 *
 	 * Registration runs for EVERY variant on every request (idempotent upsert),
 	 * even when the consolidated file already exists — so the hosted-fonts list
@@ -974,20 +973,12 @@ class Consolidator {
 			$emit[ $key ] = true;
 		}
 
-		// Cache key = the EMITTED set (+ display + subsets). Two pages that emit
-		// the same faces share one file; a page whose enabled set differs gets
-		// its own. If the keyed file already exists we never rewrite it —
-		// identical sets are deduped on disk, so we don't burn IO/CPU
-		// regenerating the same stylesheet.
+		// The emitted set (+ display + subsets), recorded on each variant row as
+		// its css_file. The stylesheet itself is named by its CONTENT (below).
 		$emit_keys = array_keys( $emit );
 		sort( $emit_keys );
 		$hash = substr( hash( 'sha256', implode( '|', $emit_keys ) . '|' . $display . '|' . $subsets ), 0, 20 );
-
-		// Consolidated stylesheet lives in a readable `css/` folder. Font
-		// binaries live under `fonts/{family}/…` so identical variants are
-		// shared across stylesheets.
-		$file        = 'css/' . $hash . '.css';
-		$file_exists = $this->storage->exists( $file );
+		$file = 'css/' . $hash . '.css';
 
 		// M-3: one batched read of the rows we already have for every detected
 		// variant, so registration costs a single SELECT instead of one per
@@ -1055,7 +1046,7 @@ class Consolidator {
 				continue;
 			}
 
-			$local_url = add_query_arg( 'ver', Settings::buster(), $this->storage->url( $font_file ) );
+			$local_url = $this->storage->font_url( $font_file );
 			$css      .= $this->build_face_rule( $v, $local_url, $display );
 
 			self::$touched[] = array(
@@ -1071,17 +1062,23 @@ class Consolidator {
 			return null;
 		}
 
-		// Deterministic content for a given emit set: only write when the keyed
-		// file doesn't already exist.
-		if ( ! $file_exists ) {
-			if ( ! $this->storage->write( $file, $css ) ) {
+		// (2.0.4) Named by CONTENT. Keyed by the emitted set alone, a file written
+		// once outlived any later change to what it should contain (a font
+		// re-downloaded after Purge, a CDN switch) and kept serving stale URLs,
+		// as did the inlined copy cached under its name. Identical content still
+		// shares one file and is never rewritten; older files are left for
+		// page-cached HTML that may still link them (Purge removes them).
+		$sheet = 'css/' . substr( hash( 'sha256', $css ), 0, 20 ) . '.css';
+
+		if ( ! $this->storage->exists( $sheet ) ) {
+			if ( ! $this->storage->write( $sheet, $css ) ) {
 				return null;
 			}
 		}
 
-		self::$stylesheet_file = $file;
+		self::$stylesheet_file = $sheet;
 
-		return add_query_arg( 'ver', Settings::buster(), $this->storage->url( $file ) );
+		return add_query_arg( 'ver', Settings::buster(), $this->storage->url( $sheet ) );
 	}
 
 	/**
@@ -1351,7 +1348,7 @@ class Consolidator {
 				$size      = $dl['size'];
 			}
 
-			$local_url = add_query_arg( 'ver', Settings::buster(), $this->storage->url( $font_file ) );
+			$local_url = $this->storage->font_url( $font_file );
 
 			$this->register_variant( $variant, $font_file, $size );
 

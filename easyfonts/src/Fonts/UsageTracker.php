@@ -217,13 +217,18 @@ class UsageTracker {
 	 * robust to weight/style differences and self-correcting.
 	 *
 	 *   - `rendered`   drives page scoping (which fonts load on this page).
-	 *   - `above_fold` drives preload (which of them to fetch early).
+	 *   - `above_fold` the families above the fold.
+	 *   - `fold_faces` drives preload: for every family rendered here, the faces
+	 *     ('weight|style') the beacon saw above the fold — empty when the family
+	 *     renders only further down. (2.0.4) Preload used to take the whole
+	 *     family, so a family with many weights filled every slot with weights
+	 *     the page never shows.
 	 *
 	 * Empty `rendered` means the route hasn't been measured yet — callers must
 	 * neither scope nor preload from no data.
 	 *
 	 * @param string $route Canonical route (path).
-	 * @return array{rendered:array<string,bool>,above_fold:array<string,bool>,scope_out:array<string,bool>,measured:bool}
+	 * @return array{rendered:array<string,bool>,above_fold:array<string,bool>,fold_faces:array<string,array<string,bool>>,scope_out:array<string,bool>,measured:bool}
 	 */
 	public function route_render_profile( string $route ): array {
 		global $wpdb;
@@ -231,6 +236,7 @@ class UsageTracker {
 		$out = array(
 			'rendered'   => array(),
 			'above_fold' => array(),
+			'fold_faces' => array(),
 			'scope_out'  => array(),
 			'measured'   => false,
 		);
@@ -247,21 +253,40 @@ class UsageTracker {
 		// never saw it render. A family that hasn't been beacon-measured yet
 		// (e.g. a font just added/replaced in the Customizer) is NEVER scoped
 		// out — it loads normally until a beacon has had a chance to judge it.
+		// Grouped per face (still one query); folded per family below.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
-				"SELECT family,
+				"SELECT family, weight, style,
 					MAX(rendered) AS rnd,
 					MAX(CASE WHEN rendered = 1 THEN above_fold ELSE 0 END) AS af,
 					MAX(CASE WHEN origin = 'beacon' THEN 1 ELSE 0 END) AS beaconed,
 					MAX(beacon_misses) AS misses
 				 FROM {$this->usage_table()}
 				 WHERE page_url = %s
-				 GROUP BY family",
+				 GROUP BY family, weight, style",
 				$route
 			),
 			ARRAY_A
 		);
+
+		$families = array();
+
+		foreach ( (array) $rows as $r ) {
+			$fam = strtolower( (string) $r['family'] );
+			$agg = $families[ $fam ] ?? array( 'rnd' => 0, 'af' => 0, 'beaconed' => 0, 'misses' => 0, 'faces' => array() );
+
+			$agg['rnd']      = max( $agg['rnd'], (int) $r['rnd'] );
+			$agg['af']       = max( $agg['af'], (int) $r['af'] );
+			$agg['beaconed'] = max( $agg['beaconed'], (int) $r['beaconed'] );
+			$agg['misses']   = max( $agg['misses'], (int) $r['misses'] );
+
+			if ( ! empty( $r['af'] ) ) {
+				$agg['faces'][ $r['weight'] . '|' . $r['style'] ] = true;
+			}
+
+			$families[ $fam ] = $agg;
+		}
 
 		/**
 		 * Consistent beacon measurements required before a never-rendered
@@ -273,27 +298,25 @@ class UsageTracker {
 		 */
 		$min_misses = max( 1, (int) apply_filters( 'easyfonts_scope_out_min_measurements', 2 ) );
 
-		if ( $rows ) {
-			foreach ( $rows as $r ) {
-				$fam      = strtolower( (string) $r['family'] );
-				$rendered = ! empty( $r['rnd'] );
-				$beaconed = ! empty( $r['beaconed'] );
+		foreach ( $families as $fam => $r ) {
+			$rendered = ! empty( $r['rnd'] );
+			$beaconed = ! empty( $r['beaconed'] );
 
-				if ( $beaconed ) {
-					$out['measured'] = true;
+			if ( $beaconed ) {
+				$out['measured'] = true;
+			}
+
+			if ( $rendered ) {
+				$out['rendered'][ $fam ]   = true;
+				$out['fold_faces'][ $fam ] = $r['faces'];
+
+				if ( ! empty( $r['af'] ) ) {
+					$out['above_fold'][ $fam ] = true;
 				}
-
-				if ( $rendered ) {
-					$out['rendered'][ $fam ] = true;
-
-					if ( ! empty( $r['af'] ) ) {
-						$out['above_fold'][ $fam ] = true;
-					}
-				} elseif ( $beaconed && (int) $r['misses'] >= $min_misses ) {
-					// Multiple beacons measured it and never saw it render →
-					// confirmed scope-out.
-					$out['scope_out'][ $fam ] = true;
-				}
+			} elseif ( $beaconed && (int) $r['misses'] >= $min_misses ) {
+				// Multiple beacons measured it and never saw it render →
+				// confirmed scope-out.
+				$out['scope_out'][ $fam ] = true;
 			}
 		}
 
@@ -307,20 +330,34 @@ class UsageTracker {
 	 * given route has been measured), which is the cheap path: no per-route
 	 * check needed for the fonts whose answer is the same everywhere.
 	 *
-	 * @return array<string,bool> Lowercased family => true.
+	 * (2.0.4) With the faces ('weight|style') those families render in. A value
+	 * of `true` is a family stored by 2.0.3 without its faces — it stands for
+	 * the whole family until the next recompute (next beacon, or weekly GC).
+	 *
+	 * @return array<string,array<string,bool>|true> Lowercased family => faces.
 	 */
-	public function global_preload_families(): array {
+	public function global_preload_faces(): array {
 		$list = get_option( 'easyfonts_global_preload', array() );
+		$out  = array();
 
-		return is_array( $list ) ? array_fill_keys( array_map( 'strval', $list ), true ) : array();
+		foreach ( is_array( $list ) ? $list : array() as $key => $value ) {
+			if ( is_array( $value ) ) {
+				$out[ (string) $key ] = array_fill_keys( array_map( 'strval', $value ), true );
+			} elseif ( is_int( $key ) ) {
+				$out[ strtolower( (string) $value ) ] = true;
+			}
+		}
+
+		return $out;
 	}
 
 	/**
 	 * Recompute and cache the uniformly-above-the-fold family set. A family
 	 * qualifies when every measured row for it (across all routes/variants where
 	 * it renders) is above the fold — so its preload answer doesn't vary by page
-	 * and we can skip per-route checks for it. Cheap: one grouped scan of the
-	 * (capped) usage table; called when a beacon is accepted and from GC.
+	 * and we can skip per-route checks for it. Stored with the faces it renders
+	 * in, so preload stays weight-level. Cheap: one grouped scan of the (capped)
+	 * usage table; called when a beacon is accepted and from GC.
 	 *
 	 * @return void
 	 */
@@ -328,16 +365,35 @@ class UsageTracker {
 		global $wpdb;
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared
-		$families = $wpdb->get_col(
-			"SELECT family FROM {$this->usage_table()}
+		$rows = $wpdb->get_results(
+			"SELECT family, weight, style, MIN(above_fold) AS af FROM {$this->usage_table()}
 			 WHERE rendered = 1
-			 GROUP BY family
-			 HAVING MIN(above_fold) = 1"
+			 GROUP BY family, weight, style",
+			ARRAY_A
 		);
 
-		$families = $families ? array_values( array_unique( array_map( 'strtolower', $families ) ) ) : array();
+		$faces = array();
+		$below = array();
 
-		update_option( 'easyfonts_global_preload', $families, true );
+		foreach ( (array) $rows as $r ) {
+			$fam = strtolower( (string) $r['family'] );
+
+			if ( empty( $r['af'] ) ) {
+				$below[ $fam ] = true;
+			}
+
+			$faces[ $fam ][ $r['weight'] . '|' . $r['style'] ] = true;
+		}
+
+		$global = array();
+
+		foreach ( $faces as $fam => $set ) {
+			if ( ! isset( $below[ $fam ] ) ) {
+				$global[ $fam ] = array_keys( $set );
+			}
+		}
+
+		update_option( 'easyfonts_global_preload', $global, true );
 	}
 
 	/**

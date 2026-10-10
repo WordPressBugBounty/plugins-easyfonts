@@ -29,6 +29,45 @@ class RestApi {
 	 */
 	public function boot(): void {
 		add_action( 'rest_api_init', array( $this, 'register' ) );
+		// After core's cookie check (priority 100).
+		add_filter( 'rest_authentication_errors', array( $this, 'accept_cached_page_token' ), 101 );
+	}
+
+	/**
+	 * (2.0.4) Let a page-cached beacon through on its cache-safe token.
+	 *
+	 * A cached page carries the nonce it was rendered with, which expires
+	 * within a day. WordPress rejects ANY REST request carrying an invalid
+	 * nonce (403 rest_cookie_invalid_nonce) before the route runs — logged in
+	 * or not — so the token those pages also send was never checked, and every
+	 * beacon from a day-old cached page failed. Since 2.0.4 the scripts send
+	 * the token alone; this covers pages cached by older versions. Only for
+	 * the two public endpoints, only with a valid token, and the request then
+	 * runs as no user — exactly as if no nonce had been sent.
+	 *
+	 * @param mixed $result Authentication result so far.
+	 * @return mixed
+	 */
+	public function accept_cached_page_token( $result ) {
+		if ( ! is_wp_error( $result ) || 'rest_cookie_invalid_nonce' !== $result->get_error_code() ) {
+			return $result;
+		}
+
+		$route = isset( $GLOBALS['wp']->query_vars['rest_route'] ) ? untrailingslashit( (string) $GLOBALS['wp']->query_vars['rest_route'] ) : '';
+
+		if ( ! in_array( $route, array( '/' . self::NS . '/beacon', '/' . self::NS . '/async-fonts' ), true ) ) {
+			return $result;
+		}
+
+		$token = isset( $_GET['_eftoken'] ) ? (string) wp_unslash( $_GET['_eftoken'] ) : ''; // phpcs:ignore WordPress.Security.NonceVerification, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+
+		if ( '' === $token || ! hash_equals( Settings::beacon_token(), $token ) ) {
+			return $result;
+		}
+
+		wp_set_current_user( 0 );
+
+		return true;
 	}
 
 	/**

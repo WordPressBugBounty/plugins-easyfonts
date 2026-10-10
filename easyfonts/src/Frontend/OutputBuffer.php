@@ -134,10 +134,10 @@ class OutputBuffer {
 			// and keeps the shared cache complete.
 			$tracker    = new UsageTracker();
 			$profile    = $this->force
-				? array( 'scope_out' => array(), 'above_fold' => array(), 'measured' => false )
+				? array( 'scope_out' => array(), 'fold_faces' => array(), 'measured' => false )
 				: $tracker->route_render_profile( $route );
 			$scope_out  = $profile['scope_out'];
-			$above_fold = $profile['above_fold'];
+			$fold_faces = $profile['fold_faces'];
 			$measured   = ! empty( $profile['measured'] );
 
 			// 1. Detect + localise. The consolidator is transactional: it only
@@ -159,7 +159,7 @@ class OutputBuffer {
 				}
 
 				// 3. Inject preloads → consolidated stylesheet → metric fallbacks.
-				$head = $this->build_head( $route, $device, $above_fold );
+				$head = $this->build_head( $route, $device, $fold_faces );
 
 				if ( '' !== $head ) {
 					$buffer = $this->html->before_head_close( $buffer, $head );
@@ -243,16 +243,16 @@ class OutputBuffer {
 	 *
 	 * @param string             $route      Canonical route for this page.
 	 * @param string             $device     Device ('mobile'|'desktop').
-	 * @param array<string,bool> $above_fold Lowercased families above the fold on this route.
+	 * @param array<string,array<string,bool>> $fold_faces Above-the-fold faces per family rendered on this route.
 	 * @return string
 	 */
-	private function build_head( string $route = '', string $device = 'any', array $above_fold = array() ): string {
+	private function build_head( string $route = '', string $device = 'any', array $fold_faces = array() ): string {
 		$out        = '';
 		$stylesheet = Consolidator::stylesheet_url();
 
 		// Preloads — above the stylesheet, deduped inside SmartPreload, scoped
 		// to the fonts actually emitted on this page (Consolidator::touched).
-		$out .= ( new SmartPreload() )->build( $route, $device, $this->present_families(), $above_fold );
+		$out .= ( new SmartPreload() )->build( $route, $device, $this->present_families(), $fold_faces );
 
 		// The single consolidated stylesheet — either inlined (non-render-
 		// blocking: no extra request) or as a normal <link>.

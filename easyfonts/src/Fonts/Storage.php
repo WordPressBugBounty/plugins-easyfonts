@@ -81,6 +81,29 @@ class Storage {
 	}
 
 	/**
+	 * Public URL of a hosted FONT, versioned by the file itself.
+	 *
+	 * (2.0.4) Font URLs used to carry the site-wide cache-buster, which every
+	 * settings save bumps. The consolidated stylesheet is written once and
+	 * reused, so its @font-face URLs kept the old buster while preloads took
+	 * the new one: two URLs for one file — the preload went unused ("preloaded
+	 * but not used") and the font downloaded twice. A file's own modification
+	 * time changes only when the file itself is (re)written, so every place
+	 * that links a font — stylesheet, preload, localised theme CSS — computes
+	 * the same URL, and a settings save no longer makes every returning visitor
+	 * download every font again. Fonts are served immutable for a year, so the
+	 * version is still needed for when a file really is re-downloaded.
+	 *
+	 * @param string $filename Cache-relative font filename.
+	 * @return string
+	 */
+	public function font_url( string $filename ): string {
+		$mtime = @filemtime( $this->path( $filename ) ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
+
+		return add_query_arg( 'ver', $mtime ? (int) $mtime : \EasyFonts\Settings::buster(), $this->url( $filename ) );
+	}
+
+	/**
 	 * Rewrite a same-origin asset URL onto the configured CDN origin.
 	 *
 	 * The CDN value is treated as an origin (scheme + host[/optional base]);

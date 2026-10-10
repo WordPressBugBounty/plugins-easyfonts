@@ -128,8 +128,14 @@
 			unload: data.unload
 		} );
 
-		var url = CFG.endpoint + '?_wpnonce=' + encodeURIComponent( CFG.nonce )
-			+ ( CFG.token ? '&_eftoken=' + encodeURIComponent( CFG.token ) : '' );
+		// The cache-safe token ALONE (2.0.4). WordPress rejects any request that
+		// carries an expired nonce (403) before our endpoint runs, and a
+		// page-cached copy's nonce expires within a day — sending it alongside
+		// the token silently killed every beacon from cached pages. '&' when the
+		// endpoint already has a query (plain permalinks: ?rest_route=).
+		var url = CFG.endpoint + ( CFG.endpoint.indexOf( '?' ) === -1 ? '?' : '&' ) + ( CFG.token
+			? '_eftoken=' + encodeURIComponent( CFG.token )
+			: '_wpnonce=' + encodeURIComponent( CFG.nonce ) );
 
 		if ( navigator.sendBeacon ) {
 			navigator.sendBeacon( url, new Blob( [ payload ], { type: 'application/json' } ) );
@@ -137,7 +143,9 @@
 			var xhr = new XMLHttpRequest();
 			xhr.open( 'POST', url, true );
 			xhr.setRequestHeader( 'Content-Type', 'application/json' );
-			xhr.setRequestHeader( 'X-WP-Nonce', CFG.nonce );
+			if ( ! CFG.token ) {
+				xhr.setRequestHeader( 'X-WP-Nonce', CFG.nonce );
+			}
 			xhr.send( payload );
 		}
 	}

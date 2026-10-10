@@ -526,15 +526,17 @@ class Registry {
 	 * single-weight family rendered bold reports weight 700, but only 400 is
 	 * hosted). An exact lookup would then return nothing and the font would
 	 * never preload. So we prefer an exact match, then the same style, then the
-	 * latin subset, then the closest available weight — always returning a real
-	 * file when the (enabled) family is hosted at all.
+	 * page's subset (2.0.4; e.g. cyrillic on a Russian site), then latin, then
+	 * the closest available weight — always returning a real file when the
+	 * (enabled) family is hosted at all.
 	 *
 	 * @param string $family Family.
 	 * @param string $weight Desired weight.
 	 * @param string $style  Desired style.
+	 * @param string $subset Preferred subset.
 	 * @return string|null
 	 */
-	public function resolve_preload_file( string $family, string $weight, string $style ): ?string {
+	public function resolve_preload_file( string $family, string $weight, string $style, string $subset = 'latin' ): ?string {
 		global $wpdb;
 
 		$target = (int) preg_replace( '/\D+/', '', $weight );
@@ -548,6 +550,7 @@ class Registry {
 				 ORDER BY
 					( weight = %s AND style = %s ) DESC,
 					( style = %s ) DESC,
+					( subset = %s ) DESC,
 					( subset = 'latin' ) DESC,
 					ABS( CAST( COALESCE( NULLIF(weight,''), '400' ) AS SIGNED ) - %d ) ASC,
 					id ASC
@@ -556,6 +559,7 @@ class Registry {
 				$weight,
 				$style,
 				$style,
+				$subset,
 				$target
 			)
 		);

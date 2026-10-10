@@ -2,9 +2,9 @@
 Contributors: easywpstuff, uzairwp
 Tags: google fonts, host google fonts locally, gdpr, core web vitals, font optimization
 Requires at least: 6.4
-Tested up to: 7.0
+Tested up to: 7.1.3
 Requires PHP: 7.4
-Stable tag: 2.0.3
+Stable tag: 2.0.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -119,6 +119,16 @@ Yes. It finds font stylesheets across your whole page — themes, plugins, and b
 == Changelog ==
 
 
+= 2.0.4 =
+* Fixed: browser console warning "…was preloaded using link preload but not used…". After a settings change, the preloaded fonts and the font stylesheet could point at two different versions of the same font file, so each preloaded font was downloaded twice and the preload was wasted. Every link to a font now carries the same version, taken from the font file itself.
+* Fixed: on page-cached sites the measurement beacon failed with 403 "Cookie check failed" once a cached page was a day old. WordPress rejected the page's expired nonce before Easy Fonts could check its cache-safe token, so Smart Preload and per-page font loading stopped learning. The beacon now sends only the token, and beacons from pages cached by older versions are accepted again as soon as you update. The async font reporter gets the same fix.
+* Fixed: the beacon and the async font reporter now work on sites with plain permalinks (they returned 404 there).
+* Fixed: after Purge, the inlined font stylesheet could keep old font links for up to a day.
+* Improved: Smart Preload now preloads the exact weights a page shows above the fold, instead of every weight of the font family. A family with many weights no longer fills the preload slots with weights the page never uses.
+* Improved: at most 3 fonts are preloaded per page (was 6), so fonts compete less with your main image. Your "always preload" choices now take their slots first. Filter: `easyfonts_preload_cap`.
+* Improved: Smart Preload picks the character set of your site's language, for example the Cyrillic file on a Russian site or the Greek file on a Greek site, instead of always the Latin one. Filter: `easyfonts_preload_subset`.
+* Performance: saving settings no longer makes every returning visitor download all fonts again. A font's URL now changes only when the font file itself changes.
+
 = 2.0.3 =
 * Fixed: database error "BIGINT UNSIGNED value is out of range" fired on nearly every render — Smart Preload's weight matching now uses signed arithmetic, so preloads work again on stock MySQL/MariaDB. Props @harryfear for the excellent report.
 * Fixed: beacon throttling and data retention were skewed on sites with a non-UTC timezone; all internal timestamps are now stored and compared in UTC.
@@ -174,6 +184,9 @@ Yes. It finds font stylesheets across your whole page — themes, plugins, and b
 * Improved: resource-hint cleanup and duplicate @font-face removal.
 
 == Upgrade Notice ==
+
+= 2.0.4 =
+Fixes the "preloaded but not used" console warning and the beacon 403 on page-cached sites, and preloads only the fonts a page really shows. Clear your page cache after updating.
 
 = 2.0.0 =
 Major update: real-browser usage measurement, smart preloading, zero-CLS fallbacks, broader font detection (inline/theme/external/webfont.js), subsets, CDN, and a redesigned admin. Recommended for everyone.
